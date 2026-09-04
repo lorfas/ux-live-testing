@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prototype</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase-config.js';
+import { screensMarkup } from './shared.js';
+
+const app = document.getElementById('app');
+const params = new URLSearchParams(location.search);
+const sessionId = params.get('session');
+
+if (!sessionId) {
+  app.innerHTML = '<div class="panel" style="max-width:420px;margin:40px auto;">' +
+    '<h1>Missing session code</h1>' +
+    '<p>Open this page using the link your test organizer gave you — it should ' +
+    'include <code>?session=...</code> at the end.</p></div>';
+} else {
+  init();
+}
+
+async function init() {
+  let supabase;
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } catch (e) {
+    app.innerHTML = '<div class="panel" style="max-width:420px;margin:40px auto;">' +
+      '<h1>Could not connect</h1><p>Check supabase-config.js has real values.</p></div>';
+    return;
+  }
+
+  app.innerHTML = '<div class="panel" style="max-width:340px;margin:40px auto;">' +
+    '<div class="phone" id="playPhone">' + screensMarkup('play') + '</div>' +
+    '</div>' +
+    '<p class="footer-note">Session ' + sessionId + '</p>';
+
+  supabase.from('sessions').upsert({ id: sessionId, status: 'active' }).then(function (res) {
+    if (res.error) console.warn('session upsert failed', res.error);
+  });
+
+  const phone = document.getElementById('playPhone');
+  let current = 'home';
+
+  function show(id) {
+    current = id;
+    phone.querySelectorAll('.screen').forEach(function (el) {
+      el.classList.toggle('active', el.dataset.screen === id);
+    });
+  }
+  show('home');
+  logEvent({ type: 'nav', screenId: 'home', x: null, y: null, hit: null, target: 'session start' });
+
+  phone.addEventListener('click', function (e) {
+    const rect = phone.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const hitEl = e.target.closest('.tap-target');
+    const hit = !!hitEl;
+    const label = hitEl ? hitEl.dataset.label : null;
+
+    const r = document.createElement('div');
+    r.className = 'ripple';
+    r.style.left = (x * rect.width) + 'px';
+    r.style.top = (y * rect.height) + 'px';
+    phone.appendChild(r);
+    setTimeout(function () { r.remove(); }, 800);
+
+    logEvent({ type: 'tap', screenId: current, x: x, y: y, hit: hit, target: label });
+
+    if (hitEl && hitEl.dataset.goto) {
+      setTimeout(function () {
+        show(hitEl.dataset.goto);
+        logEvent({ type: 'nav', screenId: hitEl.dataset.goto, x: null, y: null, hit: null, target: 'navigated from ' + label });
+      }, 180);
+    }
+  });
+
+  function logEvent(evt) {
+    supabase.from('events').insert({
+      session_id: sessionId,
+      type: evt.type,
+      screen_id: evt.screenId,
+      x: evt.x,
+      y: evt.y,
+      hit: evt.hit,
+      target: evt.target,
+      t: Date.now()
+    }).then(function (res) { if (res.error) console.warn('insert failed', res.error); });
+  }
+}
+</script>
+</body>
+</html>

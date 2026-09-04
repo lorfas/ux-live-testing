@@ -1,0 +1,256 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tap Heatmap Dashboard</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase-config.js';
+import { SCREENS, genCode, screensMarkup } from './shared.js';
+
+const app = document.getElementById('app');
+const params = new URLSearchParams(location.search);
+let sessionId = params.get('session');
+if (!sessionId) {
+  sessionId = genCode();
+  const url = new URL(location.href);
+  url.searchParams.set('session', sessionId);
+  history.replaceState(null, '', url.toString());
+}
+
+function playLink() {
+  const u = new URL(location.href);
+  u.pathname = u.pathname.replace(/watch\.html$/, 'play.html');
+  u.search = '';
+  u.searchParams.set('session', sessionId);
+  return u.toString();
+}
+function watchLink() {
+  const u = new URL(location.href);
+  u.search = '';
+  u.searchParams.set('session', sessionId);
+  return u.toString();
+}
+
+function fromRow(r) {
+  return { _id: r.id, type: r.type, screenId: r.screen_id, x: r.x, y: r.y, hit: r.hit, target: r.target, t: r.t };
+}
+
+init();
+
+async function init() {
+  let supabase;
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } catch (e) {
+    app.innerHTML = '<div class="panel"><h1>Could not connect</h1><p>Check supabase-config.js has real values.</p></div>';
+    return;
+  }
+  await supabase.from('sessions').upsert({ id: sessionId, status: 'active' });
+  render(supabase);
+}
+
+function render(supabase) {
+  app.innerHTML =
+    '<h1>Tap Heatmap &mdash; Live Session</h1>' +
+    '<div class="sub">Session code: <b>' + sessionId + '</b></div>' +
+
+    '<div class="panel">' +
+      '<h2>Links</h2>' +
+      '<div class="link-row"><label>Tester link</label><input readonly id="playUrl" value="' + playLink() + '"><button class="copy-btn" data-copy="playUrl">Copy</button></div>' +
+      '<div class="link-row"><label>Watch link</label><input readonly id="watchUrl" value="' + watchLink() + '"><button class="copy-btn ghost" data-copy="watchUrl">Copy</button></div>' +
+      '<button class="ghost" id="newSessionBtn">Start new session</button>' +
+      '<span id="copyMsg" class="copied"></span>' +
+    '</div>' +
+
+    '<div class="layout">' +
+      '<div class="col">' +
+        '<div class="panel">' +
+          '<h2><span class="status-dot" id="statusDot"></span>Live mirror</h2>' +
+          '<div class="phone mirror" id="mirrorPhone" style="position:relative;">' +
+            screensMarkup('mirror') +
+            '<div class="waiting" id="waitingMsg">Waiting for tester to open the link and start tapping&hellip;</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="col">' +
+        '<div class="panel">' +
+          '<h2>Session stats</h2>' +
+          '<div class="stats-row" id="statsRow"></div>' +
+          '<div class="insight" id="insight" style="display:none;"></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<h2>Heatmap report</h2>' +
+      '<div class="report-grid" id="reportGrid"></div>' +
+    '</div>' +
+
+    '<p class="footer-note">This session\'s data is stored under session code ' + sessionId + '.</p>';
+
+  document.querySelectorAll('[data-copy]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const input = document.getElementById(btn.dataset.copy);
+      input.select();
+      try { navigator.clipboard.writeText(input.value); } catch (e) {}
+      try { document.execCommand('copy'); } catch (e) {}
+      const msg = document.getElementById('copyMsg');
+      msg.textContent = 'Copied!';
+      setTimeout(function () { msg.textContent = ''; }, 1500);
+    });
+  });
+  document.getElementById('newSessionBtn').addEventListener('click', function () {
+    const u = new URL(location.href);
+    u.search = '';
+    u.searchParams.set('session', genCode());
+    location.href = u.toString();
+  });
+
+  const reportGrid = document.getElementById('reportGrid');
+  reportGrid.innerHTML = SCREENS.map(function (s) {
+    return '<div class="report-cell">' +
+      '<div class="phone small report" style="position:relative;" data-report-screen="' + s.id + '">' +
+        singleScreenMarkup(s.id, 'rep') +
+        '<canvas></canvas>' +
+      '</div>' +
+      '<div class="label">' + s.label + ' &mdash; <span data-count="' + s.id + '">0</span> taps</div>' +
+      '</div>';
+  }).join('');
+
+  function singleScreenMarkup(id, prefix) {
+    const wrapperDiv = document.createElement('div');
+    wrapperDiv.innerHTML = screensMarkup(prefix);
+    const target = wrapperDiv.querySelector('[data-screen="' + id + '"]');
+    target.classList.add('active');
+    return target.outerHTML;
+  }
+
+  const mirrorPhone = document.getElementById('mirrorPhone');
+  const waitingMsg = document.getElementById('waitingMsg');
+  const statusDot = document.getElementById('statusDot');
+  let mirrorCurrent = 'home';
+  function showMirror(id) {
+    mirrorCurrent = id;
+    mirrorPhone.querySelectorAll('.screen').forEach(function (el) {
+      el.classList.toggle('active', el.dataset.screen === id);
+    });
+  }
+
+  let seen = {};
+  let allEvents = [];
+
+  function redrawReport() {
+    const grid = document.getElementById('reportGrid');
+    SCREENS.forEach(function (s) {
+      const cell = grid.querySelector('[data-report-screen="' + s.id + '"]');
+      if (!cell) return;
+      const canvas = cell.querySelector('canvas');
+      const rect = cell.getBoundingClientRect();
+      canvas.width = rect.width; canvas.height = rect.height;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const taps = allEvents.filter(function (e) { return e.type === 'tap' && e.screenId === s.id && typeof e.x === 'number'; });
+      const countEl = grid.querySelector('[data-count="' + s.id + '"]');
+      if (countEl) countEl.textContent = taps.length;
+      ctx.globalCompositeOperation = 'lighter';
+      taps.forEach(function (t) {
+        const px = t.x * canvas.width, py = t.y * canvas.height;
+        const grad = ctx.createRadialGradient(px, py, 0, px, py, 26);
+        grad.addColorStop(0, 'rgba(255,45,45,0.45)');
+        grad.addColorStop(1, 'rgba(255,45,45,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(px, py, 26, 0, Math.PI * 2); ctx.fill();
+      });
+      ctx.globalCompositeOperation = 'source-over';
+    });
+  }
+
+  function redrawStats() {
+    const taps = allEvents.filter(function (e) { return e.type === 'tap'; });
+    const hits = taps.filter(function (e) { return e.hit; });
+    const first = allEvents.length ? Math.min.apply(null, allEvents.map(function (e) { return e.t; })) : null;
+    const last = allEvents.length ? Math.max.apply(null, allEvents.map(function (e) { return e.t; })) : null;
+    const durationSec = (first && last) ? Math.round((last - first) / 1000) : 0;
+    const missRate = taps.length ? Math.round(100 * (taps.length - hits.length) / taps.length) : 0;
+
+    document.getElementById('statsRow').innerHTML =
+      '<div class="stat"><b>' + taps.length + '</b>Total taps</div>' +
+      '<div class="stat"><b>' + missRate + '%</b>Miss rate</div>' +
+      '<div class="stat"><b>' + durationSec + 's</b>Session length</div>';
+
+    const insight = document.getElementById('insight');
+    const byScreen = {};
+    taps.forEach(function (t) {
+      byScreen[t.screenId] = byScreen[t.screenId] || { hit: 0, total: 0 };
+      byScreen[t.screenId].total++;
+      if (t.hit) byScreen[t.screenId].hit++;
+    });
+    let worst = null;
+    Object.keys(byScreen).forEach(function (sid) {
+      const d = byScreen[sid];
+      if (d.total >= 2) {
+        const rate = (d.total - d.hit) / d.total;
+        if (!worst || rate > worst.rate) worst = { sid: sid, rate: rate, total: d.total };
+      }
+    });
+    if (worst && worst.rate > 0.2) {
+      const label = (SCREENS.find(function (s) { return s.id === worst.sid; }) || {}).label || worst.sid;
+      insight.style.display = 'block';
+      insight.textContent = label + ' had a ' + Math.round(worst.rate * 100) + '% miss rate across ' + worst.total + ' taps — taps are landing near, but not on, the buttons.';
+    } else {
+      insight.style.display = 'none';
+    }
+  }
+
+  function handleEvents() {
+    if (allEvents.length) { waitingMsg.style.display = 'none'; statusDot.classList.add('live'); }
+    allEvents.forEach(function (e) {
+      if (seen[e._id]) return;
+      seen[e._id] = true;
+      if (e.screenId && e.screenId !== mirrorCurrent) showMirror(e.screenId);
+      if (e.type === 'tap' && typeof e.x === 'number') {
+        const rect = mirrorPhone.getBoundingClientRect();
+        const r = document.createElement('div');
+        r.className = 'ripple';
+        r.style.left = (e.x * rect.width) + 'px';
+        r.style.top = (e.y * rect.height) + 'px';
+        mirrorPhone.appendChild(r);
+        setTimeout(function () { r.remove(); }, 800);
+      }
+    });
+    redrawReport();
+    redrawStats();
+  }
+
+  async function loadInitial() {
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('t', { ascending: true });
+    if (error) { waitingMsg.textContent = 'Could not load session data.'; return; }
+    allEvents = (data || []).map(fromRow);
+    handleEvents();
+  }
+  loadInitial();
+
+  supabase
+    .channel('events-' + sessionId)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events', filter: 'session_id=eq.' + sessionId }, function (payload) {
+      allEvents.push(fromRow(payload.new));
+      handleEvents();
+    })
+    .subscribe();
+
+  window.addEventListener('resize', redrawReport);
+}
+</script>
+</body>
+</html>
