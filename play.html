@@ -5,11 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Prototype</title>
 <style>
-  html,body{margin:0;height:100%;background:#111;overflow:hidden;}
-  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;overflow:auto;}
-  #frameWrap{position:relative;transform-origin:center center;background:#fff;box-shadow:0 0 40px rgba(0,0,0,0.4);flex-shrink:0;}
-  #frameWrap iframe{display:block;border:0;width:100%;height:100%;}
-  #msg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;color:#eee;
+  html,body{margin:0;height:100%;background:#fff;overflow:hidden;overscroll-behavior:none;touch-action:none;}
+  #stage{position:fixed;inset:0;overflow:hidden;overscroll-behavior:none;display:none;}
+  #protoFrame{display:block;border:0;width:100%;height:100%;}
+  #msg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;color:#333;
        font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:24px;text-align:center;font-size:0.95rem;}
   #startOverlay{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:#111;}
   #startBtn{padding:16px 30px;font-size:1rem;font-weight:700;border:none;border-radius:12px;
@@ -19,8 +18,8 @@
 <body>
 <div id="msg"></div>
 <div id="startOverlay"><button id="startBtn">Tap to begin</button></div>
-<div id="stage" style="display:none;">
-  <div id="frameWrap"><iframe id="protoFrame"></iframe></div>
+<div id="stage">
+  <iframe id="protoFrame"></iframe>
 </div>
 
 <script type="module">
@@ -30,8 +29,6 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase-config.js';
 const params = new URLSearchParams(location.search);
 const sessionId = params.get('session');
 const src = params.get('src');
-const W = Number(params.get('w')) || 430;
-const H = Number(params.get('h')) || 900;
 
 const msgEl = document.getElementById('msg');
 function fail(text) {
@@ -62,22 +59,19 @@ async function init() {
     return;
   }
 
-  supabase.from('sessions').upsert({ id: sessionId, status: 'active' }).then(function () {});
+  function reportDeviceSize() {
+    supabase.from('sessions').update({ w: window.innerWidth, h: window.innerHeight }).eq('id', sessionId).then(function () {});
+  }
+  supabase.from('sessions').upsert({ id: sessionId, status: 'active', w: window.innerWidth, h: window.innerHeight }).then(function () {});
+  let resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(reportDeviceSize, 300);
+  });
 
   const stage = document.getElementById('stage');
-  const frameWrap = document.getElementById('frameWrap');
   const frame = document.getElementById('protoFrame');
-  frameWrap.style.width = W + 'px';
-  frameWrap.style.height = H + 'px';
-  stage.style.display = 'flex';
-
-  function fit() {
-    const pad = 24;
-    const scale = Math.min(1, (window.innerWidth - pad * 2) / W, (window.innerHeight - pad * 2) / H);
-    frameWrap.style.transform = 'scale(' + scale + ')';
-  }
-  fit();
-  window.addEventListener('resize', fit);
+  stage.style.display = 'block';
 
   let current = src;
 
@@ -86,6 +80,17 @@ async function init() {
       session_id: sessionId,
       t: Date.now()
     }, evt)).then(function (res) { if (res.error) console.warn(res.error); });
+  }
+
+  // Uses the prototype's own current viewport size (whatever the tester's
+  // real device gives it - no forced width/height), read fresh each time so
+  // an orientation change or resize doesn't throw off the normalization.
+  function frameSize() {
+    try {
+      return { w: frame.contentWindow.innerWidth, h: frame.contentWindow.innerHeight };
+    } catch (e) {
+      return { w: frame.clientWidth || 1, h: frame.clientHeight || 1 };
+    }
   }
 
   function attach() {
@@ -114,8 +119,9 @@ async function init() {
     } catch (e) {}
 
     doc.addEventListener('click', function (e) {
-      const x = e.clientX / W;
-      const y = e.clientY / H;
+      const size = frameSize();
+      const x = e.clientX / size.w;
+      const y = e.clientY / size.h;
       let hit = false, label = null;
       const el = e.target;
       const interactive = el && el.closest ? el.closest('a,button,input,select,textarea,[onclick],[role="button"],[tabindex]') : null;
@@ -126,6 +132,18 @@ async function init() {
       }
       logEvent({ type: 'tap', screen_id: current, x: x, y: y, hit: hit, target: label });
     }, true);
+
+    // Mirror scroll position too (covers drag-to-scroll / swipe gestures,
+    // since those all end up firing native 'scroll' events regardless of
+    // whether they came from touch, wheel, or trackpad input).
+    let lastScrollLog = 0;
+    frame.contentWindow.addEventListener('scroll', function () {
+      const now = Date.now();
+      if (now - lastScrollLog < 120) return;
+      lastScrollLog = now;
+      const se = doc.scrollingElement || doc.documentElement;
+      logEvent({ type: 'scroll', screen_id: current, x: se.scrollLeft, y: se.scrollTop, hit: null, target: null });
+    }, { passive: true });
   }
 
   frame.addEventListener('load', attach);

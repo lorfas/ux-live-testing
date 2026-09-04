@@ -53,8 +53,6 @@ function playLink() {
   u.search = '';
   u.searchParams.set('session', sessionId);
   u.searchParams.set('src', protoSrc);
-  u.searchParams.set('w', W);
-  u.searchParams.set('h', H);
   return u.toString();
 }
 function watchLink() {
@@ -113,10 +111,32 @@ async function init() {
     return;
   }
   await supabase.from('sessions').upsert({ id: sessionId, status: 'active' });
+
+  // Adopt the tester's actual device size automatically, so the mirror's
+  // aspect ratio matches theirs instead of an arbitrary guess - unless the
+  // width/height have been set manually via Apply.
+  try {
+    const { data } = await supabase.from('sessions').select('w,h').eq('id', sessionId).single();
+    if (data && data.w && data.h && !manualSize) { W = data.w; H = data.h; }
+  } catch (e) {}
+
+  supabase
+    .channel('session-' + sessionId)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: 'id=eq.' + sessionId }, function (payload) {
+      const w = payload.new && payload.new.w;
+      const h = payload.new && payload.new.h;
+      if (w && h && !manualSize && (w !== W || h !== H)) {
+        W = w; H = h;
+        render(supabase);
+      }
+    })
+    .subscribe();
+
   render(supabase);
 }
 
 let currentChannel = null;
+let manualSize = false;
 
 async function render(supabase) {
   const protoList = await listPrototypes();
@@ -142,13 +162,14 @@ async function render(supabase) {
           '<label>Entry file (path in this repo)</label>' +
           '<input id="srcInput" style="width:280px" placeholder="prototypes/demo/index.html" value="' + escapeHtml(protoSrc) + '">' +
         '</div>' +
-        '<div><label>Frame width</label><input id="wInput" style="width:70px" value="' + W + '"></div>' +
-        '<div><label>Frame height</label><input id="hInput" style="width:70px" value="' + H + '"></div>' +
+        '<div><label>Mirror width</label><input id="wInput" style="width:70px" value="' + W + '"></div>' +
+        '<div><label>Mirror height</label><input id="hInput" style="width:70px" value="' + H + '"></div>' +
         '<div><label>Indicator size (<span id="rsVal">' + rippleSize + '</span>px)</label><input id="rsInput" type="range" min="10" max="100" step="2" style="width:140px" value="' + rippleSize + '"></div>' +
         '<div><label>Indicator color</label><input id="rcInput" type="color" style="width:50px;padding:2px;" value="' + rippleColor + '"></div>' +
         '<div><label>Indicator permanence (<span id="rdVal">' + rippleDuration + '</span>ms)</label><input id="rdInput" type="range" min="200" max="4000" step="100" style="width:140px" value="' + rippleDuration + '"></div>' +
         '<button id="applyBtn">Apply</button>' +
       '</div>' +
+      '<p class="footer-note" style="margin-top:10px;text-align:left;">Mirror width/height auto-match the tester\'s device once they connect &mdash; only change these if you want to override that.</p>' +
     '</div>' +
 
     '<div class="panel">' +
@@ -235,6 +256,7 @@ async function render(supabase) {
     }
     W = Number(document.getElementById('wInput').value) || 430;
     H = Number(document.getElementById('hInput').value) || 900;
+    manualSize = true;
     rippleSize = Number(document.getElementById('rsInput').value) || 34;
     rippleColor = document.getElementById('rcInput').value || '#ff4040';
     rippleDuration = Number(document.getElementById('rdInput').value) || 800;
@@ -272,8 +294,18 @@ async function render(supabase) {
     mirrorReady = true;
     const queue = pendingReplays;
     pendingReplays = [];
-    queue.forEach(function (pt) { doReplayClick(pt.x, pt.y); });
+    queue.forEach(function (pt) {
+      if (pt.kind === 'scroll') doScroll(pt.x, pt.y); else doReplayClick(pt.x, pt.y);
+    });
   });
+
+  function doScroll(x, y) {
+    try { mirrorFrame.contentWindow.scrollTo(x, y); } catch (e) {}
+  }
+
+  function replayScroll(x, y) {
+    if (mirrorReady) doScroll(x, y); else pendingReplays.push({ kind: 'scroll', x: x, y: y });
+  }
 
   function doReplayClick(x, y) {
     let doc;
@@ -437,6 +469,9 @@ async function render(supabase) {
       if (e.type === 'tap' && typeof e.x === 'number') {
         if (!navigated) replayTap(e.x, e.y);
         showRipple(e.x, e.y);
+      }
+      if (e.type === 'scroll' && !navigated && typeof e.x === 'number') {
+        replayScroll(e.x, e.y);
       }
     });
     redrawReport();
