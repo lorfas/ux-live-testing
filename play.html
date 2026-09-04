@@ -11,10 +11,14 @@
   #frameWrap iframe{display:block;border:0;width:100%;height:100%;}
   #msg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;color:#eee;
        font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:24px;text-align:center;font-size:0.95rem;}
+  #startOverlay{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:#111;}
+  #startBtn{padding:16px 30px;font-size:1rem;font-weight:700;border:none;border-radius:12px;
+            background:#5b5bd6;color:#fff;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif;}
 </style>
 </head>
 <body>
 <div id="msg"></div>
+<div id="startOverlay"><button id="startBtn">Tap to begin</button></div>
 <div id="stage" style="display:none;">
   <div id="frameWrap"><iframe id="protoFrame"></iframe></div>
 </div>
@@ -30,7 +34,18 @@ const W = Number(params.get('w')) || 430;
 const H = Number(params.get('h')) || 900;
 
 const msgEl = document.getElementById('msg');
-function fail(text) { msgEl.textContent = text; msgEl.style.display = 'flex'; }
+function fail(text) {
+  msgEl.textContent = text;
+  msgEl.style.display = 'flex';
+  document.getElementById('startOverlay').style.display = 'none';
+}
+
+document.getElementById('startBtn').addEventListener('click', function () {
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+  if (req) { try { req.call(el); } catch (e) {} }
+  document.getElementById('startOverlay').style.display = 'none';
+});
 
 if (!sessionId || !src) {
   fail('This link is missing information. Ask your test organizer for the correct link.');
@@ -78,11 +93,25 @@ async function init() {
     try { doc = frame.contentDocument; } catch (e) { doc = null; }
     if (!doc) return;
 
-    try {
-      current = frame.contentWindow.location.pathname;
-    } catch (e) {}
+    function updateScreen() {
+      try {
+        current = frame.contentWindow.location.pathname + frame.contentWindow.location.hash;
+      } catch (e) {}
+      logEvent({ type: 'nav', screen_id: current, x: null, y: null, hit: null, target: null });
+    }
+    updateScreen();
 
-    logEvent({ type: 'nav', screen_id: current, x: null, y: null, hit: null, target: null });
+    // Catch SPA-style navigation that doesn't trigger a full page reload
+    // (client-side routers using pushState/replaceState, or hash-based routes).
+    try {
+      const win = frame.contentWindow;
+      const pushState = win.history.pushState;
+      const replaceState = win.history.replaceState;
+      win.history.pushState = function () { pushState.apply(this, arguments); updateScreen(); };
+      win.history.replaceState = function () { replaceState.apply(this, arguments); updateScreen(); };
+      win.addEventListener('hashchange', updateScreen);
+      win.addEventListener('popstate', updateScreen);
+    } catch (e) {}
 
     doc.addEventListener('click', function (e) {
       const x = e.clientX / W;

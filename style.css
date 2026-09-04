@@ -61,4 +61,7 @@ button.ghost{background:var(--accent-soft); color:var(--accent);}
 .status-dot.live{background:var(--good);}
 .copied{color:var(--good); font-size:0.78rem; margin-left:6px;}
 .footer-note{color:var(--muted); font-size:0.75rem; margin-top:24px; text-align:center;}
-.waiting{color:var(--muted); font-size:0.85rem; text-align:center; padding:20px;}
+.waiting{
+  position:absolute; top:0; left:0; right:0; z-index:20;
+  background:rgba(0,0,0,0.72); color:#fff; font-size:0.8rem; text-align:center; padding:10px 14px;
+}

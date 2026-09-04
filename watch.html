@@ -164,8 +164,9 @@ async function render(supabase) {
       '<div class="col">' +
         '<div class="panel">' +
           '<h2><span class="status-dot" id="statusDot"></span>Live mirror</h2>' +
-          '<div class="stage"><div class="frame-wrap" id="mirrorWrap"><iframe id="mirrorFrame"></iframe></div></div>' +
-          '<div class="waiting" id="waitingMsg">Waiting for tester to open the link&hellip;</div>' +
+          '<div class="stage"><div class="frame-wrap" id="mirrorWrap"><iframe id="mirrorFrame"></iframe>' +
+            '<div class="waiting" id="waitingMsg">Waiting for tester to open the link&hellip;</div>' +
+          '</div></div>' +
         '</div>' +
       '</div>' +
       '<div class="col">' +
