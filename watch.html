@@ -144,7 +144,7 @@ async function render(supabase) {
         '</div>' +
         '<div><label>Frame width</label><input id="wInput" style="width:70px" value="' + W + '"></div>' +
         '<div><label>Frame height</label><input id="hInput" style="width:70px" value="' + H + '"></div>' +
-        '<div><label>Indicator size</label><input id="rsInput" style="width:60px" value="' + rippleSize + '"></div>' +
+        '<div><label>Indicator size (<span id="rsVal">' + rippleSize + '</span>px)</label><input id="rsInput" type="range" min="10" max="100" step="2" style="width:140px" value="' + rippleSize + '"></div>' +
         '<div><label>Indicator color</label><input id="rcInput" type="color" style="width:50px;padding:2px;" value="' + rippleColor + '"></div>' +
         '<div><label>Indicator permanence (<span id="rdVal">' + rippleDuration + '</span>ms)</label><input id="rdInput" type="range" min="200" max="4000" step="100" style="width:140px" value="' + rippleDuration + '"></div>' +
         '<button id="applyBtn">Apply</button>' +
@@ -209,6 +209,10 @@ async function render(supabase) {
       if (res.error) console.warn(res.error);
     });
   });
+
+  const rsInput = document.getElementById('rsInput');
+  const rsVal = document.getElementById('rsVal');
+  rsInput.addEventListener('input', function () { rsVal.textContent = rsInput.value; });
 
   const rdInput = document.getElementById('rdInput');
   const rdVal = document.getElementById('rdVal');
