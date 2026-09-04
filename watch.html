@@ -21,6 +21,18 @@ let sessionId = params.get('session') || genCode();
 let protoSrc = params.get('src') || '';
 let W = Number(params.get('w')) || 430;
 let H = Number(params.get('h')) || 900;
+let rippleSize = Number(params.get('rs')) || 34;
+let rippleColor = params.get('rc') || '#ff4040';
+let rippleDuration = Number(params.get('rd')) || 800;
+let cachedProtoList = null;
+
+function hexToRgb(hex) {
+  hex = String(hex).replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map(function (c) { return c + c; }).join('');
+  const num = parseInt(hex, 16);
+  if (isNaN(num)) return '255,64,64';
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255].join(',');
+}
 
 function syncUrl() {
   const u = new URL(location.href);
@@ -28,6 +40,9 @@ function syncUrl() {
   if (protoSrc) u.searchParams.set('src', protoSrc); else u.searchParams.delete('src');
   u.searchParams.set('w', W);
   u.searchParams.set('h', H);
+  u.searchParams.set('rs', rippleSize);
+  u.searchParams.set('rc', rippleColor);
+  u.searchParams.set('rd', rippleDuration);
   history.replaceState(null, '', u.toString());
 }
 syncUrl();
@@ -49,6 +64,9 @@ function watchLink() {
   if (protoSrc) u.searchParams.set('src', protoSrc);
   u.searchParams.set('w', W);
   u.searchParams.set('h', H);
+  u.searchParams.set('rs', rippleSize);
+  u.searchParams.set('rc', rippleColor);
+  u.searchParams.set('rd', rippleDuration);
   return u.toString();
 }
 function resolveHref(p) {
@@ -61,7 +79,28 @@ function fromRow(r) {
   return { _id: r.id, type: r.type, screenId: r.screen_id, x: r.x, y: r.y, hit: r.hit, target: r.target, t: r.t };
 }
 
-let currentChannel = null;
+// Lists subfolders of /prototypes in this repo via the GitHub API (works for
+// any public repo hosted on GitHub Pages, no auth needed). Falls back to an
+// empty list (dropdown just shows "Custom path") if this isn't on github.io,
+// the repo is private, or the API rate limit is hit.
+async function listPrototypes() {
+  if (cachedProtoList) return cachedProtoList;
+  cachedProtoList = [];
+  try {
+    if (!/\.github\.io$/.test(location.hostname)) return cachedProtoList;
+    const owner = location.hostname.split('.')[0];
+    const repo = location.pathname.split('/').filter(Boolean)[0];
+    if (!owner || !repo) return cachedProtoList;
+    const resp = await fetch('https://api.github.com/repos/' + owner + '/' + repo + '/contents/prototypes');
+    if (!resp.ok) return cachedProtoList;
+    const items = await resp.json();
+    if (!Array.isArray(items)) return cachedProtoList;
+    cachedProtoList = items
+      .filter(function (i) { return i.type === 'dir'; })
+      .map(function (i) { return { name: i.name, path: 'prototypes/' + i.name + '/index.html' }; });
+  } catch (e) { cachedProtoList = []; }
+  return cachedProtoList;
+}
 
 init();
 
@@ -77,7 +116,18 @@ async function init() {
   render(supabase);
 }
 
-function render(supabase) {
+let currentChannel = null;
+
+async function render(supabase) {
+  const protoList = await listPrototypes();
+  const knownMatch = protoList.some(function (p) { return p.path === protoSrc; });
+  const showCustom = !protoSrc || !knownMatch || protoList.length === 0;
+
+  const optionsHtml = protoList.map(function (p) {
+    const sel = p.path === protoSrc ? ' selected' : '';
+    return '<option value="' + escapeHtml(p.path) + '"' + sel + '>' + escapeHtml(p.name) + '</option>';
+  }).join('') + '<option value="__custom__"' + (showCustom ? ' selected' : '') + '>Custom path&hellip;</option>';
+
   app.innerHTML =
     '<h1>Tap Heatmap &mdash; Live Session</h1>' +
     '<div class="sub">Session code: <b>' + sessionId + '</b></div>' +
@@ -85,9 +135,18 @@ function render(supabase) {
     '<div class="panel">' +
       '<h2>Prototype</h2>' +
       '<div class="setup-form">' +
-        '<div><label>Entry file (path in this repo)</label><input id="srcInput" style="width:320px" placeholder="prototypes/demo/index.html" value="' + escapeHtml(protoSrc) + '"></div>' +
+        (protoList.length
+          ? '<div><label>Choose prototype</label><select id="srcSelect" style="width:220px">' + optionsHtml + '</select></div>'
+          : '') +
+        '<div id="customWrap" style="display:' + (showCustom ? 'block' : 'none') + ';">' +
+          '<label>Entry file (path in this repo)</label>' +
+          '<input id="srcInput" style="width:280px" placeholder="prototypes/demo/index.html" value="' + escapeHtml(protoSrc) + '">' +
+        '</div>' +
         '<div><label>Frame width</label><input id="wInput" style="width:70px" value="' + W + '"></div>' +
         '<div><label>Frame height</label><input id="hInput" style="width:70px" value="' + H + '"></div>' +
+        '<div><label>Indicator size</label><input id="rsInput" style="width:60px" value="' + rippleSize + '"></div>' +
+        '<div><label>Indicator color</label><input id="rcInput" type="color" style="width:50px;padding:2px;" value="' + rippleColor + '"></div>' +
+        '<div><label>Indicator permanence (<span id="rdVal">' + rippleDuration + '</span>ms)</label><input id="rdInput" type="range" min="200" max="4000" step="100" style="width:140px" value="' + rippleDuration + '"></div>' +
         '<button id="applyBtn">Apply</button>' +
       '</div>' +
     '</div>' +
@@ -97,6 +156,7 @@ function render(supabase) {
       '<div class="link-row"><label>Tester link</label><input readonly id="playUrl" value="' + playLink() + '"><button class="copy-btn" data-copy="playUrl">Copy</button></div>' +
       '<div class="link-row"><label>Watch link</label><input readonly id="watchUrl" value="' + watchLink() + '"><button class="copy-btn ghost" data-copy="watchUrl">Copy</button></div>' +
       '<button class="ghost" id="newSessionBtn">Start new session</button>' +
+      '<button class="ghost" id="restartBtn">Restart tester&rsquo;s prototype</button>' +
       '<span id="copyMsg" class="copied"></span>' +
     '</div>' +
 
@@ -144,13 +204,41 @@ function render(supabase) {
     u.searchParams.set('h', H);
     location.href = u.toString();
   });
+  document.getElementById('restartBtn').addEventListener('click', function () {
+    supabase.from('sessions').update({ restart_at: Date.now() }).eq('id', sessionId).then(function (res) {
+      if (res.error) console.warn(res.error);
+    });
+  });
+
+  const rdInput = document.getElementById('rdInput');
+  const rdVal = document.getElementById('rdVal');
+  rdInput.addEventListener('input', function () { rdVal.textContent = rdInput.value; });
+
+  const srcSelect = document.getElementById('srcSelect');
+  const customWrap = document.getElementById('customWrap');
+  if (srcSelect) {
+    srcSelect.addEventListener('change', function () {
+      customWrap.style.display = srcSelect.value === '__custom__' ? 'block' : 'none';
+    });
+  }
   document.getElementById('applyBtn').addEventListener('click', function () {
-    protoSrc = document.getElementById('srcInput').value.trim();
+    if (srcSelect && srcSelect.value !== '__custom__') {
+      protoSrc = srcSelect.value;
+    } else {
+      protoSrc = document.getElementById('srcInput').value.trim();
+    }
     W = Number(document.getElementById('wInput').value) || 430;
     H = Number(document.getElementById('hInput').value) || 900;
+    rippleSize = Number(document.getElementById('rsInput').value) || 34;
+    rippleColor = document.getElementById('rcInput').value || '#ff4040';
+    rippleDuration = Number(document.getElementById('rdInput').value) || 800;
     syncUrl();
     render(supabase);
   });
+
+  document.documentElement.style.setProperty('--ripple-size', rippleSize + 'px');
+  document.documentElement.style.setProperty('--ripple-rgb', hexToRgb(rippleColor));
+  document.documentElement.style.setProperty('--ripple-duration', rippleDuration + 'ms');
 
   // ---------- live mirror ----------
   const mirrorWrap = document.getElementById('mirrorWrap');
@@ -184,7 +272,7 @@ function render(supabase) {
     d.style.left = (x * W) + 'px';
     d.style.top = (y * H) + 'px';
     mirrorWrap.appendChild(d);
-    setTimeout(function () { d.remove(); }, 800);
+    setTimeout(function () { d.remove(); }, rippleDuration);
   }
 
   // ---------- report grid (built dynamically per screen seen) ----------

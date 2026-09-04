@@ -101,6 +101,20 @@ async function init() {
 
   frame.addEventListener('load', attach);
   frame.src = src;
+
+  // Listen for a remote "restart" signal from the watch dashboard.
+  let lastRestartAt = null;
+  supabase
+    .channel('session-ctl-' + sessionId)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: 'id=eq.' + sessionId }, function (payload) {
+      const r = payload.new && payload.new.restart_at;
+      if (r != null && r !== lastRestartAt) {
+        lastRestartAt = r;
+        const bust = src.indexOf('?') >= 0 ? '&' : '?';
+        frame.src = src + bust + '_r=' + Date.now();
+      }
+    })
+    .subscribe();
 }
 </script>
 </body>
