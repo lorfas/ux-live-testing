@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tap Heatmap Dashboard</title>
 <link rel="stylesheet" href="./style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
 <div class="wrap" id="app"></div>
@@ -32,6 +33,18 @@ function hexToRgb(hex) {
   const num = parseInt(hex, 16);
   if (isNaN(num)) return '255,64,64';
   return [(num >> 16) & 255, (num >> 8) & 255, num & 255].join(',');
+}
+
+// Generic "save this as a file" helper, shared by the PNG and CSV exports.
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+function downloadCanvasAsPng(canvas, filename) {
+  canvas.toBlob(function (blob) { if (blob) downloadBlob(blob, filename); }, 'image/png');
 }
 
 function syncUrl() {
@@ -201,6 +214,7 @@ async function render(supabase) {
 
     '<div class="panel">' +
       '<h2>Heatmap report</h2>' +
+      '<button class="ghost" id="exportCsvBtn" style="margin-bottom:14px;">Export raw data (CSV)</button>' +
       '<div class="report-grid" id="reportGrid"></div>' +
     '</div>' +
 
@@ -232,6 +246,7 @@ async function render(supabase) {
     });
     resetMirror();
   });
+  document.getElementById('exportCsvBtn').addEventListener('click', function () { exportCsv(); });
 
   const rsInput = document.getElementById('rsInput');
   const rsVal = document.getElementById('rsVal');
@@ -295,27 +310,26 @@ async function render(supabase) {
     const queue = pendingReplays;
     pendingReplays = [];
     queue.forEach(function (pt) {
-      if (pt.kind === 'scroll') doScroll(pt.x, pt.y); else doReplayClick(pt.x, pt.y);
+      if (pt.kind === 'scroll') doScroll(mirrorFrame, pt.x, pt.y); else doReplayClick(mirrorFrame, pt.x, pt.y);
     });
   });
 
-  function doScroll(x, y) {
-    try { mirrorFrame.contentWindow.scrollTo(x, y); } catch (e) {}
+  // Generic replay helpers - work against any iframe, not just the live
+  // mirror, so the same logic can also reconstruct historical screens for
+  // the heatmap report below.
+  function doScroll(targetFrame, x, y) {
+    try { targetFrame.contentWindow.scrollTo(x, y); } catch (e) {}
   }
 
-  function replayScroll(x, y) {
-    if (mirrorReady) doScroll(x, y); else pendingReplays.push({ kind: 'scroll', x: x, y: y });
-  }
-
-  function doReplayClick(x, y) {
+  function doReplayClick(targetFrame, x, y) {
     let doc;
-    try { doc = mirrorFrame.contentDocument; } catch (e) { doc = null; }
+    try { doc = targetFrame.contentDocument; } catch (e) { doc = null; }
     if (!doc) return;
     try {
       const cx = x * W, cy = y * H;
       const el = doc.elementFromPoint(cx, cy);
       if (!el) return;
-      const win = mirrorFrame.contentWindow;
+      const win = targetFrame.contentWindow;
       const base = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, view: win };
       ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (type) {
         let evt;
@@ -328,8 +342,22 @@ async function render(supabase) {
         }
         if (evt) el.dispatchEvent(evt);
       });
-      if (typeof el.click === 'function') el.click();
     } catch (e) {}
+  }
+
+  // Replays a recorded sequence of taps/scrolls into a freshly-loaded iframe,
+  // one step at a time, to reconstruct a screen that has no real URL of its
+  // own (a single-page prototype's JS-driven state).
+  function replayRecipeInto(targetFrame, recipe) {
+    let i = 0;
+    function step() {
+      if (i >= recipe.length) return;
+      const item = recipe[i++];
+      if (item.kind === 'scroll') doScroll(targetFrame, item.x, item.y);
+      else doReplayClick(targetFrame, item.x, item.y);
+      setTimeout(step, 40);
+    }
+    step();
   }
 
   // Simulates a tap inside the mirror by replaying the same event sequence at
@@ -338,7 +366,11 @@ async function render(supabase) {
   // so the mirror's own script re-creates the same state change the tester
   // sees.
   function replayTap(x, y) {
-    if (mirrorReady) doReplayClick(x, y); else pendingReplays.push({ x: x, y: y });
+    if (mirrorReady) doReplayClick(mirrorFrame, x, y); else pendingReplays.push({ x: x, y: y });
+  }
+
+  function replayScroll(x, y) {
+    if (mirrorReady) doScroll(mirrorFrame, x, y); else pendingReplays.push({ kind: 'scroll', x: x, y: y });
   }
 
   function showMirror(screenId) {
@@ -384,20 +416,62 @@ async function render(supabase) {
     const cell = document.createElement('div');
     cell.className = 'report-cell';
     const thumbH = Math.round(THUMB_W * (H / W));
+    // A screen id with no real URL (single-page prototype state) can't just
+    // be loaded directly - start from the entry page instead, then replay
+    // the taps that got there the first time, once it's loaded.
+    const isSynthetic = screenId.indexOf('#state:') !== -1;
+    const initialSrc = isSynthetic ? resolveHref(protoSrc) : resolveHref(screenId);
     cell.innerHTML =
       '<div class="thumb-wrap" style="width:' + THUMB_W + 'px;height:' + thumbH + 'px;">' +
-        '<iframe src="' + resolveHref(screenId) + '" style="width:' + W + 'px;height:' + H + 'px;transform:scale(' + (THUMB_W / W) + ');transform-origin:top left;"></iframe>' +
+        '<iframe src="' + initialSrc + '" style="width:' + W + 'px;height:' + H + 'px;transform:scale(' + (THUMB_W / W) + ');transform-origin:top left;"></iframe>' +
         '<canvas width="' + THUMB_W + '" height="' + thumbH + '"></canvas>' +
       '</div>' +
-      '<div class="label">' + escapeHtml(basename(screenId)) + ' &mdash; <span class="count">0</span> taps</div>';
+      '<div class="label">' + escapeHtml(basename(screenId)) + ' &mdash; <span class="count">0</span> taps</div>' +
+      '<button class="ghost dl-png-btn" style="margin-top:6px;font-size:0.72rem;padding:4px 10px;">Download PNG</button>';
     reportGrid.appendChild(cell);
+    const iframeEl = cell.querySelector('iframe');
     const rec = { el: cell, canvas: cell.querySelector('canvas'), count: cell.querySelector('.count') };
     reportCells[screenId] = rec;
+
+    cell.querySelector('.dl-png-btn').addEventListener('click', function () {
+      if (!window.html2canvas) return;
+      window.html2canvas(cell.querySelector('.thumb-wrap'), { useCORS: true, backgroundColor: '#fff' })
+        .then(function (canvas) { downloadCanvasAsPng(canvas, basename(screenId) + '-heatmap.png'); })
+        .catch(function () {});
+    });
+
+    if (isSynthetic) {
+      const recipe = (stateRecipes[screenId] || []).slice();
+      iframeEl.addEventListener('load', function onLoad() {
+        iframeEl.removeEventListener('load', onLoad);
+        replayRecipeInto(iframeEl, recipe);
+      });
+    }
     return rec;
   }
 
   let seen = {};
   let allEvents = [];
+  // Ordered log of every tap/scroll so far this session, plus a snapshot of
+  // that log at the moment each screen was first reached - used to
+  // reconstruct screens that have no real URL (single-page JS state).
+  let interactionsSoFar = [];
+  let stateRecipes = {};
+
+  function exportCsv() {
+    const rows = [['type', 'screen_id', 'x', 'y', 'hit', 'target', 't']];
+    allEvents.forEach(function (e) {
+      rows.push([e.type, e.screenId, e.x, e.y, e.hit, e.target, e.t]);
+    });
+    const csv = rows.map(function (r) {
+      return r.map(function (v) {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      }).join(',');
+    }).join('\n');
+    downloadBlob(new Blob([csv], { type: 'text/csv' }), 'session-' + sessionId + '.csv');
+  }
 
   function redrawReport() {
     Object.keys(reportCells).forEach(function (screenId) {
@@ -461,6 +535,11 @@ async function render(supabase) {
     allEvents.forEach(function (e) {
       if (seen[e._id]) return;
       seen[e._id] = true;
+
+      if (e.screenId && !stateRecipes[e.screenId]) {
+        stateRecipes[e.screenId] = interactionsSoFar.slice();
+      }
+
       let navigated = false;
       if (e.screenId) {
         ensureCell(e.screenId);
@@ -469,9 +548,11 @@ async function render(supabase) {
       if (e.type === 'tap' && typeof e.x === 'number') {
         if (!navigated) replayTap(e.x, e.y);
         showRipple(e.x, e.y);
+        interactionsSoFar.push({ kind: 'tap', x: e.x, y: e.y });
       }
-      if (e.type === 'scroll' && !navigated && typeof e.x === 'number') {
-        replayScroll(e.x, e.y);
+      if (e.type === 'scroll' && typeof e.x === 'number') {
+        if (!navigated) replayScroll(e.x, e.y);
+        interactionsSoFar.push({ kind: 'scroll', x: e.x, y: e.y });
       }
     });
     redrawReport();

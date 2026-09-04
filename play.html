@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Prototype</title>
 <style>
   html,body{margin:0;height:100%;background:#fff;overflow:hidden;overscroll-behavior:none;touch-action:none;}
@@ -98,9 +98,15 @@ async function init() {
     try { doc = frame.contentDocument; } catch (e) { doc = null; }
     if (!doc) return;
 
+    let lastRouteChangeAt = 0;
+    let basePath = src;
+    try { basePath = frame.contentWindow.location.pathname; } catch (e) {}
+
     function updateScreen() {
+      lastRouteChangeAt = Date.now();
       try {
-        current = frame.contentWindow.location.pathname + frame.contentWindow.location.hash;
+        basePath = frame.contentWindow.location.pathname;
+        current = basePath + frame.contentWindow.location.hash;
       } catch (e) {}
       logEvent({ type: 'nav', screen_id: current, x: null, y: null, hit: null, target: null });
     }
@@ -116,6 +122,42 @@ async function init() {
       win.history.replaceState = function () { replaceState.apply(this, arguments); updateScreen(); };
       win.addEventListener('hashchange', updateScreen);
       win.addEventListener('popstate', updateScreen);
+    } catch (e) {}
+
+    // Fallback for prototypes that change "screens" by toggling DOM
+    // visibility with plain JS - no URL or hash change at all, so the
+    // routing detection above never fires. Fingerprint which top-level
+    // elements are currently visible; when that combination settles after a
+    // burst of DOM changes, treat it as a distinct screen. Returning to a
+    // previously-seen combination reuses the same screen id, so repeat
+    // visits still group together in the heatmap.
+    function visibleFingerprint() {
+      try {
+        const win = frame.contentWindow;
+        const parts = [];
+        Array.prototype.forEach.call(doc.body.children, function (el) {
+          const style = win.getComputedStyle(el);
+          if (style.display !== 'none' && style.visibility !== 'hidden' && !el.hidden) {
+            parts.push(el.id || el.className || el.tagName);
+          }
+        });
+        return parts.join('|') || 'default';
+      } catch (e) { return 'default'; }
+    }
+    let mutTimer = null;
+    try {
+      const mo = new (frame.contentWindow.MutationObserver || MutationObserver)(function () {
+        if (Date.now() - lastRouteChangeAt < 400) return;
+        clearTimeout(mutTimer);
+        mutTimer = setTimeout(function () {
+          const candidate = basePath + '#state:' + visibleFingerprint();
+          if (candidate !== current) {
+            current = candidate;
+            logEvent({ type: 'nav', screen_id: current, x: null, y: null, hit: null, target: null });
+          }
+        }, 250);
+      });
+      mo.observe(doc.body, { attributes: true, attributeFilter: ['class', 'style', 'hidden'], subtree: true, childList: true });
     } catch (e) {}
 
     doc.addEventListener('click', function (e) {
