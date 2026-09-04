@@ -264,10 +264,41 @@ async function render(supabase) {
   window.addEventListener('resize', fitMirror);
 
   let mirrorCurrent = null;
+  let mirrorReady = false;
+  let pendingReplays = [];
+
+  mirrorFrame.addEventListener('load', function () {
+    mirrorReady = true;
+    const queue = pendingReplays;
+    pendingReplays = [];
+    queue.forEach(function (pt) { doReplayClick(pt.x, pt.y); });
+  });
+
+  function doReplayClick(x, y) {
+    let doc;
+    try { doc = mirrorFrame.contentDocument; } catch (e) { doc = null; }
+    if (!doc) return;
+    try {
+      const el = doc.elementFromPoint(x * W, y * H);
+      if (el && typeof el.click === 'function') el.click();
+    } catch (e) {}
+  }
+
+  // Simulates a tap inside the mirror by clicking the same element at the
+  // same relative position - used when a tap didn't cause a real navigation
+  // (e.g. a single-page prototype that toggles screens via JS), so the
+  // mirror's own script re-creates the same state change the tester sees.
+  function replayTap(x, y) {
+    if (mirrorReady) doReplayClick(x, y); else pendingReplays.push({ x: x, y: y });
+  }
+
   function showMirror(screenId) {
-    if (!screenId || mirrorCurrent === screenId) return;
+    if (!screenId || mirrorCurrent === screenId) return false;
     mirrorCurrent = screenId;
+    mirrorReady = false;
+    pendingReplays = [];
     mirrorFrame.src = resolveHref(screenId);
+    return true;
   }
   if (protoSrc) showMirror(protoSrc);
 
@@ -367,11 +398,13 @@ async function render(supabase) {
     allEvents.forEach(function (e) {
       if (seen[e._id]) return;
       seen[e._id] = true;
+      let navigated = false;
       if (e.screenId) {
         ensureCell(e.screenId);
-        showMirror(e.screenId);
+        navigated = showMirror(e.screenId);
       }
       if (e.type === 'tap' && typeof e.x === 'number') {
+        if (!navigated) replayTap(e.x, e.y);
         showRipple(e.x, e.y);
       }
     });
