@@ -175,17 +175,49 @@ async function init() {
       logEvent({ type: 'tap', screen_id: current, x: x, y: y, hit: hit, target: label });
     }, true);
 
+    // Builds a stable-ish CSS selector path for an element, so the watch
+    // dashboard can find the SAME element again inside its own copy of the
+    // prototype and replay a scroll onto it specifically (rather than only
+    // ever scrolling the top-level page).
+    function cssPath(el) {
+      if (!el || el.nodeType !== 1 || el === doc.body) return '';
+      const parts = [];
+      let node = el;
+      while (node && node.nodeType === 1 && node !== doc.body) {
+        let part = node.tagName.toLowerCase();
+        if (node.id) { parts.unshift(part + '#' + node.id); break; }
+        let idx = 1, sib = node;
+        while ((sib = sib.previousElementSibling)) { if (sib.tagName === node.tagName) idx++; }
+        part += ':nth-of-type(' + idx + ')';
+        parts.unshift(part);
+        node = node.parentElement;
+      }
+      return parts.join('>');
+    }
+
     // Mirror scroll position too (covers drag-to-scroll / swipe gestures,
     // since those all end up firing native 'scroll' events regardless of
     // whether they came from touch, wheel, or trackpad input).
-    let lastScrollLog = 0;
-    frame.contentWindow.addEventListener('scroll', function () {
+    //
+    // 'scroll' events don't bubble, but a capture-phase listener on the
+    // document still sees them fire on ANY descendant during the capture
+    // pass - so this catches scrolling inside nested scrollable containers
+    // (a product list, a modal body, etc.), not just top-level page scroll.
+    // Each scrolled element is tracked/throttled separately so scrolling two
+    // different containers around the same time doesn't drop either one.
+    const lastScrollLogByTarget = new WeakMap();
+    doc.addEventListener('scroll', function (e) {
+      let el = e.target;
+      if (!el || el.nodeType !== 1) el = null;
+      const rootEl = doc.scrollingElement || doc.documentElement;
+      const scrollEl = el || rootEl;
       const now = Date.now();
-      if (now - lastScrollLog < 120) return;
-      lastScrollLog = now;
-      const se = doc.scrollingElement || doc.documentElement;
-      logEvent({ type: 'scroll', screen_id: current, x: se.scrollLeft, y: se.scrollTop, hit: null, target: null });
-    }, { passive: true });
+      const last = lastScrollLogByTarget.get(scrollEl) || 0;
+      if (now - last < 120) return;
+      lastScrollLogByTarget.set(scrollEl, now);
+      const sel = scrollEl === rootEl ? '' : cssPath(scrollEl);
+      logEvent({ type: 'scroll', screen_id: current, x: scrollEl.scrollLeft, y: scrollEl.scrollTop, hit: null, target: sel });
+    }, true);
   }
 
   frame.addEventListener('load', attach);

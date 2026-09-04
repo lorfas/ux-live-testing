@@ -310,15 +310,28 @@ async function render(supabase) {
     const queue = pendingReplays;
     pendingReplays = [];
     queue.forEach(function (pt) {
-      if (pt.kind === 'scroll') doScroll(mirrorFrame, pt.x, pt.y); else doReplayClick(mirrorFrame, pt.x, pt.y);
+      if (pt.kind === 'scroll') doScroll(mirrorFrame, pt.x, pt.y, pt.sel); else doReplayClick(mirrorFrame, pt.x, pt.y);
     });
   });
 
   // Generic replay helpers - work against any iframe, not just the live
   // mirror, so the same logic can also reconstruct historical screens for
   // the heatmap report below.
-  function doScroll(targetFrame, x, y) {
-    try { targetFrame.contentWindow.scrollTo(x, y); } catch (e) {}
+  //
+  // `sel` (when present) is a CSS selector path recorded by play.html
+  // identifying which nested scrollable element actually scrolled (a
+  // product list, a modal body, etc.) - without it, this would only ever
+  // scroll the top-level page, which is a no-op for prototypes that scroll
+  // an inner container instead of the document itself.
+  function doScroll(targetFrame, x, y, sel) {
+    try {
+      if (sel) {
+        const doc = targetFrame.contentDocument;
+        const el = doc && doc.querySelector(sel);
+        if (el) { el.scrollLeft = x; el.scrollTop = y; return; }
+      }
+      targetFrame.contentWindow.scrollTo(x, y);
+    } catch (e) {}
   }
 
   function doReplayClick(targetFrame, x, y) {
@@ -353,7 +366,7 @@ async function render(supabase) {
     function step() {
       if (i >= recipe.length) return;
       const item = recipe[i++];
-      if (item.kind === 'scroll') doScroll(targetFrame, item.x, item.y);
+      if (item.kind === 'scroll') doScroll(targetFrame, item.x, item.y, item.sel);
       else doReplayClick(targetFrame, item.x, item.y);
       setTimeout(step, 40);
     }
@@ -369,13 +382,30 @@ async function render(supabase) {
     if (mirrorReady) doReplayClick(mirrorFrame, x, y); else pendingReplays.push({ x: x, y: y });
   }
 
-  function replayScroll(x, y) {
-    if (mirrorReady) doScroll(mirrorFrame, x, y); else pendingReplays.push({ kind: 'scroll', x: x, y: y });
+  function replayScroll(x, y, sel) {
+    if (mirrorReady) doScroll(mirrorFrame, x, y, sel); else pendingReplays.push({ kind: 'scroll', x: x, y: y, sel: sel });
   }
 
   function showMirror(screenId) {
     if (!screenId || mirrorCurrent === screenId) return false;
     mirrorCurrent = screenId;
+
+    // Synthetic ids (pure-JS single-page state, no real URL) share the same
+    // path as whatever real page is already loaded and only differ by our
+    // made-up '#state:...' fragment. Assigning that to iframe.src is a
+    // same-document fragment navigation, NOT a real reload - the browser
+    // won't fire another 'load' event for it. Treating it like a real nav
+    // (as this used to) left mirrorReady stuck false forever after the
+    // first one, silently queueing every later tap/scroll into
+    // pendingReplays with nothing left to ever drain that queue - which is
+    // why things could look fine briefly and then just stop mirroring.
+    // There's also no reason to navigate here at all: a synthetic "screen"
+    // is just bookkeeping for the heatmap grouping - the mirror's live
+    // DOM/JS state (e.g. filters picked on an earlier screen) should carry
+    // straight through untouched, and the tap/scroll that produced this
+    // state gets replayed directly by the caller instead.
+    if (screenId.indexOf('#state:') !== -1) return false;
+
     mirrorReady = false;
     pendingReplays = [];
     mirrorFrame.src = resolveHref(screenId);
@@ -551,8 +581,8 @@ async function render(supabase) {
         interactionsSoFar.push({ kind: 'tap', x: e.x, y: e.y });
       }
       if (e.type === 'scroll' && typeof e.x === 'number') {
-        if (!navigated) replayScroll(e.x, e.y);
-        interactionsSoFar.push({ kind: 'scroll', x: e.x, y: e.y });
+        if (!navigated) replayScroll(e.x, e.y, e.target);
+        interactionsSoFar.push({ kind: 'scroll', x: e.x, y: e.y, sel: e.target });
       }
     });
     redrawReport();
