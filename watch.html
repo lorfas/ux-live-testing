@@ -209,6 +209,7 @@ async function render(supabase) {
     supabase.from('sessions').update({ restart_at: Date.now() }).eq('id', sessionId).then(function (res) {
       if (res.error) console.warn(res.error);
     });
+    resetMirror();
   });
 
   const rsInput = document.getElementById('rsInput');
@@ -279,15 +280,31 @@ async function render(supabase) {
     try { doc = mirrorFrame.contentDocument; } catch (e) { doc = null; }
     if (!doc) return;
     try {
-      const el = doc.elementFromPoint(x * W, y * H);
-      if (el && typeof el.click === 'function') el.click();
+      const cx = x * W, cy = y * H;
+      const el = doc.elementFromPoint(cx, cy);
+      if (!el) return;
+      const win = mirrorFrame.contentWindow;
+      const base = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, view: win };
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (type) {
+        let evt;
+        try {
+          evt = type.indexOf('pointer') === 0
+            ? new win.PointerEvent(type, Object.assign({}, base, { pointerType: 'touch', isPrimary: true }))
+            : new win.MouseEvent(type, base);
+        } catch (e) {
+          try { evt = new MouseEvent(type, base); } catch (e2) { evt = null; }
+        }
+        if (evt) el.dispatchEvent(evt);
+      });
+      if (typeof el.click === 'function') el.click();
     } catch (e) {}
   }
 
-  // Simulates a tap inside the mirror by clicking the same element at the
-  // same relative position - used when a tap didn't cause a real navigation
-  // (e.g. a single-page prototype that toggles screens via JS), so the
-  // mirror's own script re-creates the same state change the tester sees.
+  // Simulates a tap inside the mirror by replaying the same event sequence at
+  // the same relative position - used when a tap didn't cause a real
+  // navigation (e.g. a single-page prototype that toggles screens via JS),
+  // so the mirror's own script re-creates the same state change the tester
+  // sees.
   function replayTap(x, y) {
     if (mirrorReady) doReplayClick(x, y); else pendingReplays.push({ x: x, y: y });
   }
@@ -300,6 +317,20 @@ async function render(supabase) {
     mirrorFrame.src = resolveHref(screenId);
     return true;
   }
+
+  // Forces the mirror back to the entry page, even if it's already showing
+  // it (same screen_id) - needed for single-page prototypes where the
+  // screen never actually changes URL, so a plain showMirror() would be a
+  // no-op.
+  function resetMirror() {
+    mirrorReady = false;
+    pendingReplays = [];
+    if (!protoSrc) return;
+    const bust = protoSrc.indexOf('?') >= 0 ? '&' : '?';
+    mirrorFrame.src = resolveHref(protoSrc) + bust + '_r=' + Date.now();
+    mirrorCurrent = protoSrc;
+  }
+
   if (protoSrc) showMirror(protoSrc);
 
   function showRipple(x, y) {
