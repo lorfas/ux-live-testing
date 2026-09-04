@@ -12,35 +12,56 @@
 <script type="module">
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase-config.js';
-import { SCREENS, genCode, screensMarkup } from './shared.js';
+import { genCode, escapeHtml, basename } from './shared.js';
 
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
-let sessionId = params.get('session');
-if (!sessionId) {
-  sessionId = genCode();
-  const url = new URL(location.href);
-  url.searchParams.set('session', sessionId);
-  history.replaceState(null, '', url.toString());
+
+let sessionId = params.get('session') || genCode();
+let protoSrc = params.get('src') || '';
+let W = Number(params.get('w')) || 430;
+let H = Number(params.get('h')) || 900;
+
+function syncUrl() {
+  const u = new URL(location.href);
+  u.searchParams.set('session', sessionId);
+  if (protoSrc) u.searchParams.set('src', protoSrc); else u.searchParams.delete('src');
+  u.searchParams.set('w', W);
+  u.searchParams.set('h', H);
+  history.replaceState(null, '', u.toString());
 }
+syncUrl();
 
 function playLink() {
   const u = new URL(location.href);
   u.pathname = u.pathname.replace(/watch\.html$/, 'play.html');
   u.search = '';
   u.searchParams.set('session', sessionId);
+  u.searchParams.set('src', protoSrc);
+  u.searchParams.set('w', W);
+  u.searchParams.set('h', H);
   return u.toString();
 }
 function watchLink() {
   const u = new URL(location.href);
   u.search = '';
   u.searchParams.set('session', sessionId);
+  if (protoSrc) u.searchParams.set('src', protoSrc);
+  u.searchParams.set('w', W);
+  u.searchParams.set('h', H);
   return u.toString();
 }
-
+function resolveHref(p) {
+  if (!p) return 'about:blank';
+  if (/^https?:\/\//.test(p)) return p;
+  if (p.startsWith('/')) return location.origin + p;
+  return p;
+}
 function fromRow(r) {
   return { _id: r.id, type: r.type, screenId: r.screen_id, x: r.x, y: r.y, hit: r.hit, target: r.target, t: r.t };
 }
+
+let currentChannel = null;
 
 init();
 
@@ -62,6 +83,16 @@ function render(supabase) {
     '<div class="sub">Session code: <b>' + sessionId + '</b></div>' +
 
     '<div class="panel">' +
+      '<h2>Prototype</h2>' +
+      '<div class="setup-form">' +
+        '<div><label>Entry file (path in this repo)</label><input id="srcInput" style="width:320px" placeholder="prototypes/demo/index.html" value="' + escapeHtml(protoSrc) + '"></div>' +
+        '<div><label>Frame width</label><input id="wInput" style="width:70px" value="' + W + '"></div>' +
+        '<div><label>Frame height</label><input id="hInput" style="width:70px" value="' + H + '"></div>' +
+        '<button id="applyBtn">Apply</button>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="panel">' +
       '<h2>Links</h2>' +
       '<div class="link-row"><label>Tester link</label><input readonly id="playUrl" value="' + playLink() + '"><button class="copy-btn" data-copy="playUrl">Copy</button></div>' +
       '<div class="link-row"><label>Watch link</label><input readonly id="watchUrl" value="' + watchLink() + '"><button class="copy-btn ghost" data-copy="watchUrl">Copy</button></div>' +
@@ -73,10 +104,8 @@ function render(supabase) {
       '<div class="col">' +
         '<div class="panel">' +
           '<h2><span class="status-dot" id="statusDot"></span>Live mirror</h2>' +
-          '<div class="phone mirror" id="mirrorPhone" style="position:relative;">' +
-            screensMarkup('mirror') +
-            '<div class="waiting" id="waitingMsg">Waiting for tester to open the link and start tapping&hellip;</div>' +
-          '</div>' +
+          '<div class="stage"><div class="frame-wrap" id="mirrorWrap"><iframe id="mirrorFrame"></iframe></div></div>' +
+          '<div class="waiting" id="waitingMsg">Waiting for tester to open the link&hellip;</div>' +
         '</div>' +
       '</div>' +
       '<div class="col">' +
@@ -110,63 +139,95 @@ function render(supabase) {
     const u = new URL(location.href);
     u.search = '';
     u.searchParams.set('session', genCode());
+    if (protoSrc) u.searchParams.set('src', protoSrc);
+    u.searchParams.set('w', W);
+    u.searchParams.set('h', H);
     location.href = u.toString();
   });
+  document.getElementById('applyBtn').addEventListener('click', function () {
+    protoSrc = document.getElementById('srcInput').value.trim();
+    W = Number(document.getElementById('wInput').value) || 430;
+    H = Number(document.getElementById('hInput').value) || 900;
+    syncUrl();
+    render(supabase);
+  });
 
-  const reportGrid = document.getElementById('reportGrid');
-  reportGrid.innerHTML = SCREENS.map(function (s) {
-    return '<div class="report-cell">' +
-      '<div class="phone small report" style="position:relative;" data-report-screen="' + s.id + '">' +
-        singleScreenMarkup(s.id, 'rep') +
-        '<canvas></canvas>' +
-      '</div>' +
-      '<div class="label">' + s.label + ' &mdash; <span data-count="' + s.id + '">0</span> taps</div>' +
-      '</div>';
-  }).join('');
-
-  function singleScreenMarkup(id, prefix) {
-    const wrapperDiv = document.createElement('div');
-    wrapperDiv.innerHTML = screensMarkup(prefix);
-    const target = wrapperDiv.querySelector('[data-screen="' + id + '"]');
-    target.classList.add('active');
-    return target.outerHTML;
-  }
-
-  const mirrorPhone = document.getElementById('mirrorPhone');
+  // ---------- live mirror ----------
+  const mirrorWrap = document.getElementById('mirrorWrap');
+  const mirrorFrame = document.getElementById('mirrorFrame');
   const waitingMsg = document.getElementById('waitingMsg');
   const statusDot = document.getElementById('statusDot');
-  let mirrorCurrent = 'home';
-  function showMirror(id) {
-    mirrorCurrent = id;
-    mirrorPhone.querySelectorAll('.screen').forEach(function (el) {
-      el.classList.toggle('active', el.dataset.screen === id);
-    });
+  mirrorWrap.style.width = W + 'px';
+  mirrorWrap.style.height = H + 'px';
+
+  function fitMirror() {
+    const stageEl = mirrorWrap.parentElement;
+    const availW = stageEl.clientWidth - 40;
+    const availH = 560;
+    const scale = Math.min(1, availW / W, availH / H);
+    mirrorWrap.style.transform = 'scale(' + scale + ')';
+  }
+  fitMirror();
+  window.addEventListener('resize', fitMirror);
+
+  let mirrorCurrent = null;
+  function showMirror(screenId) {
+    if (!screenId || mirrorCurrent === screenId) return;
+    mirrorCurrent = screenId;
+    mirrorFrame.src = resolveHref(screenId);
+  }
+  if (protoSrc) showMirror(protoSrc);
+
+  function showRipple(x, y) {
+    const d = document.createElement('div');
+    d.className = 'ripple';
+    d.style.left = (x * W) + 'px';
+    d.style.top = (y * H) + 'px';
+    mirrorWrap.appendChild(d);
+    setTimeout(function () { d.remove(); }, 800);
+  }
+
+  // ---------- report grid (built dynamically per screen seen) ----------
+  const reportGrid = document.getElementById('reportGrid');
+  const reportCells = {};
+  const THUMB_W = 160;
+
+  function ensureCell(screenId) {
+    if (reportCells[screenId]) return reportCells[screenId];
+    const cell = document.createElement('div');
+    cell.className = 'report-cell';
+    const thumbH = Math.round(THUMB_W * (H / W));
+    cell.innerHTML =
+      '<div class="thumb-wrap" style="width:' + THUMB_W + 'px;height:' + thumbH + 'px;">' +
+        '<iframe src="' + resolveHref(screenId) + '" style="width:' + W + 'px;height:' + H + 'px;transform:scale(' + (THUMB_W / W) + ');transform-origin:top left;"></iframe>' +
+        '<canvas width="' + THUMB_W + '" height="' + thumbH + '"></canvas>' +
+      '</div>' +
+      '<div class="label">' + escapeHtml(basename(screenId)) + ' &mdash; <span class="count">0</span> taps</div>';
+    reportGrid.appendChild(cell);
+    const rec = { el: cell, canvas: cell.querySelector('canvas'), count: cell.querySelector('.count') };
+    reportCells[screenId] = rec;
+    return rec;
   }
 
   let seen = {};
   let allEvents = [];
 
   function redrawReport() {
-    const grid = document.getElementById('reportGrid');
-    SCREENS.forEach(function (s) {
-      const cell = grid.querySelector('[data-report-screen="' + s.id + '"]');
-      if (!cell) return;
-      const canvas = cell.querySelector('canvas');
-      const rect = cell.getBoundingClientRect();
-      canvas.width = rect.width; canvas.height = rect.height;
+    Object.keys(reportCells).forEach(function (screenId) {
+      const rec = reportCells[screenId];
+      const canvas = rec.canvas;
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const taps = allEvents.filter(function (e) { return e.type === 'tap' && e.screenId === s.id && typeof e.x === 'number'; });
-      const countEl = grid.querySelector('[data-count="' + s.id + '"]');
-      if (countEl) countEl.textContent = taps.length;
+      const taps = allEvents.filter(function (e) { return e.type === 'tap' && e.screenId === screenId && typeof e.x === 'number'; });
+      rec.count.textContent = taps.length;
       ctx.globalCompositeOperation = 'lighter';
       taps.forEach(function (t) {
         const px = t.x * canvas.width, py = t.y * canvas.height;
-        const grad = ctx.createRadialGradient(px, py, 0, px, py, 26);
-        grad.addColorStop(0, 'rgba(255,45,45,0.45)');
+        const grad = ctx.createRadialGradient(px, py, 0, px, py, 16);
+        grad.addColorStop(0, 'rgba(255,45,45,0.5)');
         grad.addColorStop(1, 'rgba(255,45,45,0)');
         ctx.fillStyle = grad;
-        ctx.beginPath(); ctx.arc(px, py, 26, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(px, py, 16, 0, Math.PI * 2); ctx.fill();
       });
       ctx.globalCompositeOperation = 'source-over';
     });
@@ -201,9 +262,8 @@ function render(supabase) {
       }
     });
     if (worst && worst.rate > 0.2) {
-      const label = (SCREENS.find(function (s) { return s.id === worst.sid; }) || {}).label || worst.sid;
       insight.style.display = 'block';
-      insight.textContent = label + ' had a ' + Math.round(worst.rate * 100) + '% miss rate across ' + worst.total + ' taps — taps are landing near, but not on, the buttons.';
+      insight.textContent = basename(worst.sid) + ' had a ' + Math.round(worst.rate * 100) + '% miss rate across ' + worst.total + ' taps — taps are landing near, but not on, interactive elements.';
     } else {
       insight.style.display = 'none';
     }
@@ -214,15 +274,12 @@ function render(supabase) {
     allEvents.forEach(function (e) {
       if (seen[e._id]) return;
       seen[e._id] = true;
-      if (e.screenId && e.screenId !== mirrorCurrent) showMirror(e.screenId);
+      if (e.screenId) {
+        ensureCell(e.screenId);
+        showMirror(e.screenId);
+      }
       if (e.type === 'tap' && typeof e.x === 'number') {
-        const rect = mirrorPhone.getBoundingClientRect();
-        const r = document.createElement('div');
-        r.className = 'ripple';
-        r.style.left = (e.x * rect.width) + 'px';
-        r.style.top = (e.y * rect.height) + 'px';
-        mirrorPhone.appendChild(r);
-        setTimeout(function () { r.remove(); }, 800);
+        showRipple(e.x, e.y);
       }
     });
     redrawReport();
@@ -241,15 +298,16 @@ function render(supabase) {
   }
   loadInitial();
 
-  supabase
+  if (currentChannel) {
+    try { supabase.removeChannel(currentChannel); } catch (e) {}
+  }
+  currentChannel = supabase
     .channel('events-' + sessionId)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events', filter: 'session_id=eq.' + sessionId }, function (payload) {
       allEvents.push(fromRow(payload.new));
       handleEvents();
     })
     .subscribe();
-
-  window.addEventListener('resize', redrawReport);
 }
 </script>
 </body>

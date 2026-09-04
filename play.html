@@ -4,25 +4,36 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Prototype</title>
-<link rel="stylesheet" href="./style.css">
+<style>
+  html,body{margin:0;height:100%;background:#111;overflow:hidden;}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;overflow:auto;}
+  #frameWrap{position:relative;transform-origin:center center;background:#fff;box-shadow:0 0 40px rgba(0,0,0,0.4);flex-shrink:0;}
+  #frameWrap iframe{display:block;border:0;width:100%;height:100%;}
+  #msg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;color:#eee;
+       font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:24px;text-align:center;font-size:0.95rem;}
+</style>
 </head>
 <body>
-<div class="wrap" id="app"></div>
+<div id="msg"></div>
+<div id="stage" style="display:none;">
+  <div id="frameWrap"><iframe id="protoFrame"></iframe></div>
+</div>
 
 <script type="module">
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase-config.js';
-import { screensMarkup } from './shared.js';
 
-const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
 const sessionId = params.get('session');
+const src = params.get('src');
+const W = Number(params.get('w')) || 430;
+const H = Number(params.get('h')) || 900;
 
-if (!sessionId) {
-  app.innerHTML = '<div class="panel" style="max-width:420px;margin:40px auto;">' +
-    '<h1>Missing session code</h1>' +
-    '<p>Open this page using the link your test organizer gave you — it should ' +
-    'include <code>?session=...</code> at the end.</p></div>';
+const msgEl = document.getElementById('msg');
+function fail(text) { msgEl.textContent = text; msgEl.style.display = 'flex'; }
+
+if (!sessionId || !src) {
+  fail('This link is missing information. Ask your test organizer for the correct link.');
 } else {
   init();
 }
@@ -32,69 +43,64 @@ async function init() {
   try {
     supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   } catch (e) {
-    app.innerHTML = '<div class="panel" style="max-width:420px;margin:40px auto;">' +
-      '<h1>Could not connect</h1><p>Check supabase-config.js has real values.</p></div>';
+    fail('Could not connect.');
     return;
   }
 
-  app.innerHTML = '<div class="panel" style="max-width:340px;margin:40px auto;">' +
-    '<div class="phone" id="playPhone">' + screensMarkup('play') + '</div>' +
-    '</div>' +
-    '<p class="footer-note">Session ' + sessionId + '</p>';
+  supabase.from('sessions').upsert({ id: sessionId, status: 'active' }).then(function () {});
 
-  supabase.from('sessions').upsert({ id: sessionId, status: 'active' }).then(function (res) {
-    if (res.error) console.warn('session upsert failed', res.error);
-  });
+  const stage = document.getElementById('stage');
+  const frameWrap = document.getElementById('frameWrap');
+  const frame = document.getElementById('protoFrame');
+  frameWrap.style.width = W + 'px';
+  frameWrap.style.height = H + 'px';
+  stage.style.display = 'flex';
 
-  const phone = document.getElementById('playPhone');
-  let current = 'home';
-
-  function show(id) {
-    current = id;
-    phone.querySelectorAll('.screen').forEach(function (el) {
-      el.classList.toggle('active', el.dataset.screen === id);
-    });
+  function fit() {
+    const pad = 24;
+    const scale = Math.min(1, (window.innerWidth - pad * 2) / W, (window.innerHeight - pad * 2) / H);
+    frameWrap.style.transform = 'scale(' + scale + ')';
   }
-  show('home');
-  logEvent({ type: 'nav', screenId: 'home', x: null, y: null, hit: null, target: 'session start' });
+  fit();
+  window.addEventListener('resize', fit);
 
-  phone.addEventListener('click', function (e) {
-    const rect = phone.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    const hitEl = e.target.closest('.tap-target');
-    const hit = !!hitEl;
-    const label = hitEl ? hitEl.dataset.label : null;
-
-    const r = document.createElement('div');
-    r.className = 'ripple';
-    r.style.left = (x * rect.width) + 'px';
-    r.style.top = (y * rect.height) + 'px';
-    phone.appendChild(r);
-    setTimeout(function () { r.remove(); }, 800);
-
-    logEvent({ type: 'tap', screenId: current, x: x, y: y, hit: hit, target: label });
-
-    if (hitEl && hitEl.dataset.goto) {
-      setTimeout(function () {
-        show(hitEl.dataset.goto);
-        logEvent({ type: 'nav', screenId: hitEl.dataset.goto, x: null, y: null, hit: null, target: 'navigated from ' + label });
-      }, 180);
-    }
-  });
+  let current = src;
 
   function logEvent(evt) {
-    supabase.from('events').insert({
+    supabase.from('events').insert(Object.assign({
       session_id: sessionId,
-      type: evt.type,
-      screen_id: evt.screenId,
-      x: evt.x,
-      y: evt.y,
-      hit: evt.hit,
-      target: evt.target,
       t: Date.now()
-    }).then(function (res) { if (res.error) console.warn('insert failed', res.error); });
+    }, evt)).then(function (res) { if (res.error) console.warn(res.error); });
   }
+
+  function attach() {
+    let doc;
+    try { doc = frame.contentDocument; } catch (e) { doc = null; }
+    if (!doc) return;
+
+    try {
+      current = frame.contentWindow.location.pathname;
+    } catch (e) {}
+
+    logEvent({ type: 'nav', screen_id: current, x: null, y: null, hit: null, target: null });
+
+    doc.addEventListener('click', function (e) {
+      const x = e.clientX / W;
+      const y = e.clientY / H;
+      let hit = false, label = null;
+      const el = e.target;
+      const interactive = el && el.closest ? el.closest('a,button,input,select,textarea,[onclick],[role="button"],[tabindex]') : null;
+      if (interactive) {
+        hit = true;
+        label = (interactive.getAttribute('aria-label') || interactive.getAttribute('title') ||
+          (interactive.textContent || '').trim() || interactive.tagName.toLowerCase()).slice(0, 60);
+      }
+      logEvent({ type: 'tap', screen_id: current, x: x, y: y, hit: hit, target: label });
+    }, true);
+  }
+
+  frame.addEventListener('load', attach);
+  frame.src = src;
 }
 </script>
 </body>
