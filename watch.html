@@ -6,6 +6,7 @@
 <title>Tap Heatmap Dashboard</title>
 <link rel="stylesheet" href="./style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
 <div class="wrap" id="app"></div>
@@ -25,6 +26,7 @@ let H = Number(params.get('h')) || 900;
 let rippleSize = Number(params.get('rs')) || 34;
 let rippleColor = params.get('rc') || '#ff4040';
 let rippleDuration = Number(params.get('rd')) || 800;
+let showQr = params.get('qr') === '1';
 let cachedProtoList = null;
 
 function hexToRgb(hex) {
@@ -71,6 +73,7 @@ function syncUrl() {
   u.searchParams.set('rs', rippleSize);
   u.searchParams.set('rc', rippleColor);
   u.searchParams.set('rd', rippleDuration);
+  u.searchParams.set('qr', showQr ? '1' : '0');
   history.replaceState(null, '', u.toString());
 }
 syncUrl();
@@ -91,6 +94,7 @@ function watchLink() {
   u.searchParams.set('rs', rippleSize);
   u.searchParams.set('rc', rippleColor);
   u.searchParams.set('rd', rippleDuration);
+  u.searchParams.set('qr', showQr ? '1' : '0');
   return u.toString();
 }
 function resolveHref(p) {
@@ -149,13 +153,14 @@ async function init() {
   // mirror's aspect ratio matches theirs instead of an arbitrary guess -
   // unless the width/height have been set manually via Apply.
   try {
-    const { data } = await supabase.from('sessions').select('w,h,src').eq('id', sessionId).single();
+    const { data } = await supabase.from('sessions').select('w,h,src,show_tap').eq('id', sessionId).single();
     if (data && data.w && data.h && !manualSize) { W = data.w; H = data.h; }
     if (data && data.src) {
       protoSrc = data.src;
     } else if (protoSrc) {
       await supabase.from('sessions').update({ src: protoSrc }).eq('id', sessionId);
     }
+    if (data) showTapOnTester = !!data.show_tap;
   } catch (e) {}
 
   supabase
@@ -164,9 +169,11 @@ async function init() {
       const w = payload.new && payload.new.w;
       const h = payload.new && payload.new.h;
       const s = payload.new && payload.new.src;
+      const st = payload.new && !!payload.new.show_tap;
       let changed = false;
       if (w && h && !manualSize && (w !== W || h !== H)) { W = w; H = h; changed = true; }
       if (s && s !== protoSrc) { protoSrc = s; changed = true; }
+      if (st !== showTapOnTester) { showTapOnTester = st; changed = true; }
       if (changed) render(supabase);
     })
     .subscribe();
@@ -176,6 +183,7 @@ async function init() {
 
 let currentChannel = null;
 let manualSize = false;
+let showTapOnTester = false;
 
 // Changes which prototype this session points to: persists it to the
 // sessions row (so the tester's already-shared link, and this dashboard on
@@ -214,6 +222,9 @@ async function render(supabase) {
         '</div>' +
         '<button class="ghost" id="restartBtn">Restart tester&rsquo;s prototype</button>' +
       '</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:0.85rem;">' +
+        '<input type="checkbox" id="showTapChk"' + (showTapOnTester ? ' checked' : '') + '> Show tap indicator on the tester\'s own screen' +
+      '</label>' +
       '<p class="footer-note" style="margin-top:10px;text-align:left;">Choosing a prototype here applies immediately - the tester link doesn\'t need to change.</p>' +
     '</div>' +
 
@@ -222,7 +233,12 @@ async function render(supabase) {
       '<div class="link-row"><label>Tester link</label><input readonly id="playUrl" value="' + playLink() + '"><button class="copy-btn" data-copy="playUrl">Copy</button></div>' +
       '<div class="link-row"><label>Watch link</label><input readonly id="watchUrl" value="' + watchLink() + '"><button class="copy-btn ghost" data-copy="watchUrl">Copy</button></div>' +
       '<button class="ghost" id="newSessionBtn">Start new session</button>' +
+      '<button class="ghost" id="qrToggleBtn">' + (showQr ? 'Hide QR code' : 'Show QR code') + '</button>' +
       '<span id="copyMsg" class="copied"></span>' +
+      '<div id="qrWrap" style="display:' + (showQr ? 'block' : 'none') + ';margin-top:12px;">' +
+        '<div id="qrCode" style="display:inline-block;background:#fff;padding:12px;border-radius:10px;line-height:0;"></div>' +
+        '<p class="footer-note" style="text-align:left;margin-top:6px;">Scan to open the tester link on a phone &mdash; quicker than typing or copy-pasting it over.</p>' +
+      '</div>' +
     '</div>' +
 
     '<div class="panel">' +
@@ -258,6 +274,7 @@ async function render(supabase) {
 
     '<div class="panel">' +
       '<h2>Heatmap report</h2>' +
+      '<p class="footer-note" style="margin:0 0 10px;text-align:left;"><span style="color:#ff2d2d;">&#9679;</span> taps &nbsp; <span style="color:#3385ff;">&#9679;</span> scroll position (whole-page scroll only)</p>' +
       '<button class="ghost" id="exportCsvBtn" style="margin-bottom:14px;">Export raw data (CSV)</button>' +
       '<div class="report-grid" id="reportGrid"></div>' +
     '</div>' +
@@ -292,6 +309,24 @@ async function render(supabase) {
   });
   document.getElementById('exportCsvBtn').addEventListener('click', function () { exportCsv(); });
 
+  const qrToggleBtn = document.getElementById('qrToggleBtn');
+  const qrWrap = document.getElementById('qrWrap');
+  const qrCodeEl = document.getElementById('qrCode');
+  function renderQrCode() {
+    qrCodeEl.innerHTML = '';
+    try {
+      if (window.QRCode) new window.QRCode(qrCodeEl, { text: playLink(), width: 160, height: 160, colorDark: '#1d1d1f', colorLight: '#ffffff' });
+    } catch (e) {}
+  }
+  if (showQr) renderQrCode();
+  qrToggleBtn.addEventListener('click', function () {
+    showQr = !showQr;
+    syncUrl();
+    qrWrap.style.display = showQr ? 'block' : 'none';
+    qrToggleBtn.textContent = showQr ? 'Hide QR code' : 'Show QR code';
+    if (showQr && !qrCodeEl.hasChildNodes()) renderQrCode();
+  });
+
   const rsInput = document.getElementById('rsInput');
   const rsVal = document.getElementById('rsVal');
   rsInput.addEventListener('input', function () { rsVal.textContent = rsInput.value; });
@@ -315,6 +350,10 @@ async function render(supabase) {
   document.getElementById('useCustomBtn').addEventListener('click', function () {
     const p = document.getElementById('srcInput').value.trim();
     if (p) switchPrototype(supabase, p);
+  });
+  document.getElementById('showTapChk').addEventListener('change', function () {
+    showTapOnTester = this.checked;
+    supabase.from('sessions').update({ show_tap: showTapOnTester }).eq('id', sessionId).then(function () {});
   });
   document.getElementById('applyBtn').addEventListener('click', function () {
     W = Number(document.getElementById('wInput').value) || 430;
@@ -507,11 +546,11 @@ async function render(supabase) {
         '<iframe src="' + initialSrc + '" style="width:' + W + 'px;height:' + H + 'px;transform:scale(' + (THUMB_W / W) + ');transform-origin:top left;"></iframe>' +
         '<canvas width="' + THUMB_W + '" height="' + thumbH + '"></canvas>' +
       '</div>' +
-      '<div class="label">' + escapeHtml(describeScreen(screenId)) + ' &mdash; <span class="count">0</span> taps</div>' +
+      '<div class="label">' + escapeHtml(describeScreen(screenId)) + ' &mdash; <span class="count">0</span> taps &middot; <span class="scrollcount">0</span> scroll</div>' +
       '<button class="ghost dl-png-btn" style="margin-top:6px;font-size:0.72rem;padding:4px 10px;">Download PNG</button>';
     reportGrid.appendChild(cell);
     const iframeEl = cell.querySelector('iframe');
-    const rec = { el: cell, canvas: cell.querySelector('canvas'), count: cell.querySelector('.count') };
+    const rec = { el: cell, canvas: cell.querySelector('canvas'), count: cell.querySelector('.count'), scrollCount: cell.querySelector('.scrollcount') };
     reportCells[screenId] = rec;
 
     cell.querySelector('.dl-png-btn').addEventListener('click', function () {
@@ -562,8 +601,27 @@ async function render(supabase) {
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const taps = allEvents.filter(function (e) { return e.type === 'tap' && e.screenId === screenId && typeof e.x === 'number'; });
+      // Only whole-page scroll (no recorded target selector) has a
+      // meaningful position on THIS thumbnail's viewport - an inner
+      // container's scrollLeft/scrollTop are in that container's own
+      // coordinate space, not the screen's, so they'd plot in the wrong
+      // place here. Values are raw scroll pixels (not 0..1 fractions like
+      // taps), clamped into the same viewport-fraction space so a scroll
+      // that went past one screen's height still shows at the bottom edge
+      // rather than being lost.
+      const scrolls = allEvents.filter(function (e) { return e.type === 'scroll' && e.screenId === screenId && typeof e.x === 'number' && !e.target; });
       rec.count.textContent = taps.length;
+      if (rec.scrollCount) rec.scrollCount.textContent = scrolls.length;
       ctx.globalCompositeOperation = 'lighter';
+      scrolls.forEach(function (s) {
+        const fx = Math.max(0, Math.min(1, s.x / W)), fy = Math.max(0, Math.min(1, s.y / H));
+        const px = fx * canvas.width, py = fy * canvas.height;
+        const grad = ctx.createRadialGradient(px, py, 0, px, py, 12);
+        grad.addColorStop(0, 'rgba(51,133,255,0.35)');
+        grad.addColorStop(1, 'rgba(51,133,255,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(px, py, 12, 0, Math.PI * 2); ctx.fill();
+      });
       taps.forEach(function (t) {
         const px = t.x * canvas.width, py = t.y * canvas.height;
         const grad = ctx.createRadialGradient(px, py, 0, px, py, 16);

@@ -76,14 +76,19 @@ async function init() {
   const stage = document.getElementById('stage');
   const frame = document.getElementById('protoFrame');
 
+  // Off by default - the tester normally sees zero tracking UI. The
+  // organizer can flip this on from the dashboard (live, mid-session) for
+  // cases where it helps to have the tester see their own taps too.
+  let showTapIndicator = false;
+
   // The prototype itself lives in the sessions row, not necessarily the
-  // URL - look it up if it wasn't given directly.
-  if (!src) {
-    try {
-      const { data } = await supabase.from('sessions').select('src').eq('id', sessionId).single();
-      if (data && data.src) src = data.src;
-    } catch (e) {}
-  }
+  // URL - look it up if it wasn't given directly. Also pick up the
+  // tap-indicator preference from the same row.
+  try {
+    const { data } = await supabase.from('sessions').select('src, show_tap').eq('id', sessionId).single();
+    if (!src && data && data.src) src = data.src;
+    if (data) showTapIndicator = !!data.show_tap;
+  } catch (e) {}
 
   let current = src || '';
 
@@ -105,10 +110,26 @@ async function init() {
     }
   }
 
+  // Injects the CSS for the on-screen tap indicator into the prototype's
+  // own document (same-origin, so this is safe) - only drawn when
+  // showTapIndicator is on. Idempotent per document load.
+  function ensureTapRippleStyle(doc) {
+    if (doc.getElementById('__tapRippleStyle')) return;
+    const style = doc.createElement('style');
+    style.id = '__tapRippleStyle';
+    style.textContent =
+      '.__tap-ripple{position:fixed;width:40px;height:40px;margin-left:-20px;margin-top:-20px;' +
+      'border-radius:50%;border:3px solid rgba(91,91,214,0.85);background:rgba(91,91,214,0.18);' +
+      'pointer-events:none;z-index:2147483647;animation:__tap-rip 450ms ease-out forwards;}' +
+      '@keyframes __tap-rip{0%{transform:scale(0.3);opacity:1;}100%{transform:scale(2.2);opacity:0;}}';
+    doc.head.appendChild(style);
+  }
+
   function attach() {
     let doc;
     try { doc = frame.contentDocument; } catch (e) { doc = null; }
     if (!doc) return;
+    ensureTapRippleStyle(doc);
 
     let lastRouteChangeAt = 0;
     let basePath = src;
@@ -148,12 +169,24 @@ async function init() {
 
     // Fallback for prototypes that change "screens" by toggling DOM
     // visibility with plain JS - no URL or hash change at all, so the
-    // routing detection above never fires. Fingerprint which top-level
-    // elements are currently visible; when that combination settles after a
-    // burst of DOM changes, treat it as a distinct screen. Returning to a
-    // previously-seen combination reuses the same screen id, so repeat
-    // visits still group together in the heatmap.
-    function visibleFingerprint() {
+    // routing detection above never fires. Fingerprints three things: which
+    // top-level elements are visible (a whole screen swap), which modals/
+    // dialogs are currently open ANYWHERE in the page (not just top-level -
+    // a modal is meaningfully a different "screen" even nested deep inside
+    // the current one), and which controls are in an "on" state (a toggle,
+    // a selected filter chip, an expanded accordion). When the combination
+    // settles after a burst of DOM changes, treat it as a distinct screen.
+    // Returning to a previously-seen combination reuses the same screen id,
+    // so repeat visits still group together in the heatmap.
+    //
+    // The "on state" part only looks for standard ARIA state attributes
+    // (aria-pressed/-selected/-expanded/-checked) and .active/.selected
+    // classes - deliberately narrow, so incidental class/style churn
+    // elsewhere (a scroll-driven header collapsing, an animation class)
+    // doesn't spam new "screens" for every little visual change. A
+    // prototype's buttons/filters/tabs need to actually set one of these to
+    // be picked up - see the prototype compatibility checklist.
+    function stateFingerprint() {
       try {
         const win = frame.contentWindow;
         const parts = [];
@@ -162,6 +195,15 @@ async function init() {
           if (style.display !== 'none' && style.visibility !== 'hidden' && !el.hidden) {
             parts.push(el.id || el.className || el.tagName);
           }
+        });
+        Array.prototype.forEach.call(doc.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog[open]'), function (el) {
+          const style = win.getComputedStyle(el);
+          if (style.display !== 'none' && style.visibility !== 'hidden' && !el.hidden) {
+            parts.push('modal:' + (el.id || el.className || el.tagName));
+          }
+        });
+        Array.prototype.forEach.call(doc.querySelectorAll('[aria-pressed="true"],[aria-selected="true"],[aria-expanded="true"],[aria-checked="true"],.active,.selected'), function (el) {
+          parts.push('on:' + (el.id || el.className || el.tagName));
         });
         return parts.join('|') || 'default';
       } catch (e) { return 'default'; }
@@ -172,7 +214,7 @@ async function init() {
         if (Date.now() - lastRouteChangeAt < 400) return;
         clearTimeout(mutTimer);
         mutTimer = setTimeout(function () {
-          const candidate = basePath + '#state:' + visibleFingerprint();
+          const candidate = basePath + '#state:' + stateFingerprint();
           if (candidate !== screenBase) {
             screenBase = candidate;
             scrollDepthBucket = 0;
@@ -181,7 +223,12 @@ async function init() {
           }
         }, 250);
       });
-      mo.observe(doc.body, { attributes: true, attributeFilter: ['class', 'style', 'hidden'], subtree: true, childList: true });
+      mo.observe(doc.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-pressed', 'aria-selected', 'aria-expanded', 'aria-checked', 'aria-modal'],
+        subtree: true,
+        childList: true
+      });
     } catch (e) {}
 
     doc.addEventListener('click', function (e) {
@@ -197,6 +244,15 @@ async function init() {
           (interactive.textContent || '').trim() || interactive.tagName.toLowerCase()).slice(0, 60);
       }
       logEvent({ type: 'tap', screen_id: current, x: x, y: y, hit: hit, target: label });
+
+      if (showTapIndicator) {
+        const d = doc.createElement('div');
+        d.className = '__tap-ripple';
+        d.style.left = e.clientX + 'px';
+        d.style.top = e.clientY + 'px';
+        doc.body.appendChild(d);
+        setTimeout(function () { d.remove(); }, 500);
+      }
     }, true);
 
     // Builds a stable-ish CSS selector path for an element, so the watch
@@ -285,14 +341,16 @@ async function init() {
     msgEl.style.display = 'flex';
   }
 
-  // Listen for a remote "restart" signal from the watch dashboard, and for
-  // the organizer switching to a different prototype mid-session (or
-  // choosing one for the first time, if this link was opened before they
-  // had) - both come through the same sessions row.
+  // Listen for a remote "restart" signal from the watch dashboard, the
+  // organizer switching to a different prototype mid-session (or choosing
+  // one for the first time, if this link was opened before they had), and
+  // the tap-indicator toggle - all come through the same sessions row.
   let lastRestartAt = null;
   supabase
     .channel('session-ctl-' + sessionId)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: 'id=eq.' + sessionId }, function (payload) {
+      if (payload.new) showTapIndicator = !!payload.new.show_tap;
+
       const s = payload.new && payload.new.src;
       if (s && s !== src) {
         loadPrototype(s);
