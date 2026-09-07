@@ -47,10 +47,25 @@ function downloadCanvasAsPng(canvas, filename) {
   canvas.toBlob(function (blob) { if (blob) downloadBlob(blob, filename); }, 'image/png');
 }
 
+// Human-readable label for a screen id, including the two synthetic
+// (no-real-URL) kinds: a pure-JS state toggle, or a scroll-depth "page"
+// within a real screen.
+function describeScreen(screenId) {
+  const s = String(screenId);
+  const scrollMatch = /~~scroll:(\d+)/.exec(s);
+  const base = basename(s.split('~~')[0].split('#state:')[0]);
+  if (scrollMatch) return base + ' (scrolled, section ' + scrollMatch[1] + ')';
+  if (s.indexOf('#state:') !== -1) return base + ' (state)';
+  return base;
+}
+
+// The prototype (`src`) is no longer part of either link's URL - it lives
+// in the sessions row instead (see switchPrototype() below), so a tester
+// link keeps working even if you change prototype after sharing it.
 function syncUrl() {
   const u = new URL(location.href);
   u.searchParams.set('session', sessionId);
-  if (protoSrc) u.searchParams.set('src', protoSrc); else u.searchParams.delete('src');
+  u.searchParams.delete('src');
   u.searchParams.set('w', W);
   u.searchParams.set('h', H);
   u.searchParams.set('rs', rippleSize);
@@ -65,14 +80,12 @@ function playLink() {
   u.pathname = u.pathname.replace(/watch\.html$/, 'play.html');
   u.search = '';
   u.searchParams.set('session', sessionId);
-  u.searchParams.set('src', protoSrc);
   return u.toString();
 }
 function watchLink() {
   const u = new URL(location.href);
   u.search = '';
   u.searchParams.set('session', sessionId);
-  if (protoSrc) u.searchParams.set('src', protoSrc);
   u.searchParams.set('w', W);
   u.searchParams.set('h', H);
   u.searchParams.set('rs', rippleSize);
@@ -125,12 +138,24 @@ async function init() {
   }
   await supabase.from('sessions').upsert({ id: sessionId, status: 'active' });
 
-  // Adopt the tester's actual device size automatically, so the mirror's
-  // aspect ratio matches theirs instead of an arbitrary guess - unless the
-  // width/height have been set manually via Apply.
+  // The sessions row is the one source of truth for which prototype is
+  // being tested - it's what makes the tester link reusable even after you
+  // switch prototypes (see switchPrototype() below). Adopt whatever is
+  // already there; if this is a brand-new session and a `src` query param
+  // was given (old-style link, or a fresh "Start new session"), persist
+  // that as the starting value instead.
+  //
+  // Also adopt the tester's actual device size automatically, so the
+  // mirror's aspect ratio matches theirs instead of an arbitrary guess -
+  // unless the width/height have been set manually via Apply.
   try {
-    const { data } = await supabase.from('sessions').select('w,h').eq('id', sessionId).single();
+    const { data } = await supabase.from('sessions').select('w,h,src').eq('id', sessionId).single();
     if (data && data.w && data.h && !manualSize) { W = data.w; H = data.h; }
+    if (data && data.src) {
+      protoSrc = data.src;
+    } else if (protoSrc) {
+      await supabase.from('sessions').update({ src: protoSrc }).eq('id', sessionId);
+    }
   } catch (e) {}
 
   supabase
@@ -138,10 +163,11 @@ async function init() {
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: 'id=eq.' + sessionId }, function (payload) {
       const w = payload.new && payload.new.w;
       const h = payload.new && payload.new.h;
-      if (w && h && !manualSize && (w !== W || h !== H)) {
-        W = w; H = h;
-        render(supabase);
-      }
+      const s = payload.new && payload.new.src;
+      let changed = false;
+      if (w && h && !manualSize && (w !== W || h !== H)) { W = w; H = h; changed = true; }
+      if (s && s !== protoSrc) { protoSrc = s; changed = true; }
+      if (changed) render(supabase);
     })
     .subscribe();
 
@@ -150,6 +176,16 @@ async function init() {
 
 let currentChannel = null;
 let manualSize = false;
+
+// Changes which prototype this session points to: persists it to the
+// sessions row (so the tester's already-shared link, and this dashboard on
+// reload, both pick it up) and rebuilds the dashboard against it.
+async function switchPrototype(supabase, newSrc) {
+  protoSrc = newSrc;
+  syncUrl();
+  try { await supabase.from('sessions').update({ src: newSrc }).eq('id', sessionId); } catch (e) {}
+  render(supabase);
+}
 
 async function render(supabase) {
   const protoList = await listPrototypes();
@@ -173,16 +209,12 @@ async function render(supabase) {
           : '') +
         '<div id="customWrap" style="display:' + (showCustom ? 'block' : 'none') + ';">' +
           '<label>Entry file (path in this repo)</label>' +
-          '<input id="srcInput" style="width:280px" placeholder="prototypes/demo/index.html" value="' + escapeHtml(protoSrc) + '">' +
+          '<input id="srcInput" style="width:260px" placeholder="prototypes/demo/index.html" value="' + escapeHtml(protoSrc) + '">' +
+          ' <button id="useCustomBtn" class="ghost">Use this prototype</button>' +
         '</div>' +
-        '<div><label>Mirror width</label><input id="wInput" style="width:70px" value="' + W + '"></div>' +
-        '<div><label>Mirror height</label><input id="hInput" style="width:70px" value="' + H + '"></div>' +
-        '<div><label>Indicator size (<span id="rsVal">' + rippleSize + '</span>px)</label><input id="rsInput" type="range" min="10" max="100" step="2" style="width:140px" value="' + rippleSize + '"></div>' +
-        '<div><label>Indicator color</label><input id="rcInput" type="color" style="width:50px;padding:2px;" value="' + rippleColor + '"></div>' +
-        '<div><label>Indicator permanence (<span id="rdVal">' + rippleDuration + '</span>ms)</label><input id="rdInput" type="range" min="200" max="4000" step="100" style="width:140px" value="' + rippleDuration + '"></div>' +
-        '<button id="applyBtn">Apply</button>' +
+        '<button class="ghost" id="restartBtn">Restart tester&rsquo;s prototype</button>' +
       '</div>' +
-      '<p class="footer-note" style="margin-top:10px;text-align:left;">Mirror width/height auto-match the tester\'s device once they connect &mdash; only change these if you want to override that.</p>' +
+      '<p class="footer-note" style="margin-top:10px;text-align:left;">Choosing a prototype here applies immediately - the tester link doesn\'t need to change.</p>' +
     '</div>' +
 
     '<div class="panel">' +
@@ -190,8 +222,20 @@ async function render(supabase) {
       '<div class="link-row"><label>Tester link</label><input readonly id="playUrl" value="' + playLink() + '"><button class="copy-btn" data-copy="playUrl">Copy</button></div>' +
       '<div class="link-row"><label>Watch link</label><input readonly id="watchUrl" value="' + watchLink() + '"><button class="copy-btn ghost" data-copy="watchUrl">Copy</button></div>' +
       '<button class="ghost" id="newSessionBtn">Start new session</button>' +
-      '<button class="ghost" id="restartBtn">Restart tester&rsquo;s prototype</button>' +
       '<span id="copyMsg" class="copied"></span>' +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<h2>Mirror &amp; indicator settings</h2>' +
+      '<div class="setup-form">' +
+        '<div><label>Mirror width</label><input id="wInput" style="width:70px" value="' + W + '"></div>' +
+        '<div><label>Mirror height</label><input id="hInput" style="width:70px" value="' + H + '"></div>' +
+        '<div><label>Indicator size (<span id="rsVal">' + rippleSize + '</span>px)</label><input id="rsInput" type="range" min="10" max="100" step="2" style="width:140px" value="' + rippleSize + '"></div>' +
+        '<div><label>Indicator color</label><input id="rcInput" type="color" style="width:50px;padding:2px;" value="' + rippleColor + '"></div>' +
+        '<div><label>Indicator permanence (<span id="rdVal">' + rippleDuration + '</span>ms)</label><input id="rdInput" type="range" min="200" max="4000" step="100" style="width:140px" value="' + rippleDuration + '"></div>' +
+        '<button id="applyBtn">Apply</button>' +
+      '</div>' +
+      '<p class="footer-note" style="margin-top:10px;text-align:left;">Purely visual, on your side only - mirror width/height auto-match the tester\'s device once they connect; only change these to override that.</p>' +
     '</div>' +
 
     '<div class="layout">' +
@@ -260,15 +304,19 @@ async function render(supabase) {
   const customWrap = document.getElementById('customWrap');
   if (srcSelect) {
     srcSelect.addEventListener('change', function () {
-      customWrap.style.display = srcSelect.value === '__custom__' ? 'block' : 'none';
+      if (srcSelect.value === '__custom__') {
+        customWrap.style.display = 'block';
+      } else {
+        customWrap.style.display = 'none';
+        switchPrototype(supabase, srcSelect.value);
+      }
     });
   }
+  document.getElementById('useCustomBtn').addEventListener('click', function () {
+    const p = document.getElementById('srcInput').value.trim();
+    if (p) switchPrototype(supabase, p);
+  });
   document.getElementById('applyBtn').addEventListener('click', function () {
-    if (srcSelect && srcSelect.value !== '__custom__') {
-      protoSrc = srcSelect.value;
-    } else {
-      protoSrc = document.getElementById('srcInput').value.trim();
-    }
     W = Number(document.getElementById('wInput').value) || 430;
     H = Number(document.getElementById('hInput').value) || 900;
     manualSize = true;
@@ -404,7 +452,9 @@ async function render(supabase) {
     // DOM/JS state (e.g. filters picked on an earlier screen) should carry
     // straight through untouched, and the tap/scroll that produced this
     // state gets replayed directly by the caller instead.
-    if (screenId.indexOf('#state:') !== -1) return false;
+    // ('#state:' = pure-JS visibility toggle fallback; '~~scroll:' = a
+    // scroll-depth "page" within the same real screen - see play.html.)
+    if (screenId.indexOf('#state:') !== -1 || screenId.indexOf('~~scroll:') !== -1) return false;
 
     mirrorReady = false;
     pendingReplays = [];
@@ -446,17 +496,18 @@ async function render(supabase) {
     const cell = document.createElement('div');
     cell.className = 'report-cell';
     const thumbH = Math.round(THUMB_W * (H / W));
-    // A screen id with no real URL (single-page prototype state) can't just
-    // be loaded directly - start from the entry page instead, then replay
-    // the taps that got there the first time, once it's loaded.
-    const isSynthetic = screenId.indexOf('#state:') !== -1;
+    // A screen id with no real URL (single-page prototype state, or a
+    // scroll-depth "page" within one) can't just be loaded directly - start
+    // from the entry page instead, then replay the taps/scrolls that got
+    // there the first time, once it's loaded.
+    const isSynthetic = screenId.indexOf('#state:') !== -1 || screenId.indexOf('~~scroll:') !== -1;
     const initialSrc = isSynthetic ? resolveHref(protoSrc) : resolveHref(screenId);
     cell.innerHTML =
       '<div class="thumb-wrap" style="width:' + THUMB_W + 'px;height:' + thumbH + 'px;">' +
         '<iframe src="' + initialSrc + '" style="width:' + W + 'px;height:' + H + 'px;transform:scale(' + (THUMB_W / W) + ');transform-origin:top left;"></iframe>' +
         '<canvas width="' + THUMB_W + '" height="' + thumbH + '"></canvas>' +
       '</div>' +
-      '<div class="label">' + escapeHtml(basename(screenId)) + ' &mdash; <span class="count">0</span> taps</div>' +
+      '<div class="label">' + escapeHtml(describeScreen(screenId)) + ' &mdash; <span class="count">0</span> taps</div>' +
       '<button class="ghost dl-png-btn" style="margin-top:6px;font-size:0.72rem;padding:4px 10px;">Download PNG</button>';
     reportGrid.appendChild(cell);
     const iframeEl = cell.querySelector('iframe');
@@ -465,8 +516,9 @@ async function render(supabase) {
 
     cell.querySelector('.dl-png-btn').addEventListener('click', function () {
       if (!window.html2canvas) return;
+      const safeName = describeScreen(screenId).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
       window.html2canvas(cell.querySelector('.thumb-wrap'), { useCORS: true, backgroundColor: '#fff' })
-        .then(function (canvas) { downloadCanvasAsPng(canvas, basename(screenId) + '-heatmap.png'); })
+        .then(function (canvas) { downloadCanvasAsPng(canvas, (safeName || 'screen') + '-heatmap.png'); })
         .catch(function () {});
     });
 
@@ -554,7 +606,7 @@ async function render(supabase) {
     });
     if (worst && worst.rate > 0.2) {
       insight.style.display = 'block';
-      insight.textContent = basename(worst.sid) + ' had a ' + Math.round(worst.rate * 100) + '% miss rate across ' + worst.total + ' taps — taps are landing near, but not on, interactive elements.';
+      insight.textContent = describeScreen(worst.sid) + ' had a ' + Math.round(worst.rate * 100) + '% miss rate across ' + worst.total + ' taps — taps are landing near, but not on, interactive elements.';
     } else {
       insight.style.display = 'none';
     }
@@ -601,8 +653,17 @@ async function render(supabase) {
   }
   loadInitial();
 
+  // Awaiting the removal matters: this render() can run more than once (an
+  // Apply click, a device-size auto-adopt, a prototype change) and if a new
+  // channel with the SAME topic name is opened before the old one has
+  // actually finished leaving server-side, the old subscription's callback
+  // can keep firing against this now-stale closure (updating detached
+  // state nothing on screen reads) while the new one silently never
+  // attaches - live taps then never reach the visible mirror/report until
+  // a full page reload forces a fresh fetch. This was very likely why the
+  // mirror sometimes only updated after a manual refresh.
   if (currentChannel) {
-    try { supabase.removeChannel(currentChannel); } catch (e) {}
+    try { await supabase.removeChannel(currentChannel); } catch (e) {}
   }
   currentChannel = supabase
     .channel('events-' + sessionId)
