@@ -236,7 +236,7 @@ img{-webkit-user-drag:none;user-select:none;}
    and IconBlob.module.scss's __shape/__icon parts). */
 .snackbar-icon{ flex:none; width:24px; height:24px; position:relative; display:flex; align-items:center; justify-content:center; }
 .snackbar-icon .icon-blob-shape{ position:absolute; inset:0; width:100%; height:100%; display:block; }
-.snackbar-icon svg{ position:relative; z-index:1; }
+.snackbar-icon svg{ position:relative; z-index:1; width:18px; height:18px; }
 .snackbar-text{ flex:1; font-size:14px; line-height:18px; font-weight:400; color:#161617; }
 .snackbar-text b{ font-weight:700; }
 .snackbar-action{
@@ -445,11 +445,42 @@ img{-webkit-user-drag:none;user-select:none;}
 #screen-store .hero-top-row{ display:flex; justify-content:space-between; align-items:flex-start; position:relative; z-index:1; }
 #screen-store .hero-actions{ display:flex; gap:8px; }
 #screen-store .hero-bottom{ position:relative; z-index:1; display:flex; align-items:flex-end; justify-content:space-between; }
-#screen-store .logo-badge{ width:56px; height:56px; border-radius:16px; background:#111; display:flex; align-items:center; justify-content:center; font-size:22px; margin-bottom:8px; border:2px solid rgba(255,255,255,0.5); overflow:hidden; }
+/* Fix 1 (title layout pass): real Figma layout for the HeaderTitle block
+   (node I2533:478036;1765:827744, get_design_context on 2533:478035) puts
+   the avatar to the LEFT of the title/rating text column (gap:
+   spacing/s=12px), not stacked above it — .hero-title-row/.hero-title-col
+   replace the old single-column div. component/avatar/size/m (get_variable_defs
+   on the same node) = 64px square, cornerRadius/m = 16px — was 56px before.
+   Title uses text/size/xxl=28 / text/height/xxl=32 / text/weight/bold=700
+   (was 26px/800). Rating row uses text/size/s=14 / text/height/s=20 (was
+   13px), with spacing/vertical/textToSubitle=4px between title and rating —
+   now a flex `gap` on .hero-title-col instead of the rating's own margin-top,
+   since the two now share one flex column. Figma also shows a small rating
+   iconBlob and a trailing chevron in this row; both are new content (not
+   present anywhere else in this file to reuse) and are out of scope for a
+   layout/spacing-only pass, so they're intentionally not added here. */
+#screen-store .hero-title-row{ display:flex; align-items:center; gap:12px; }
+#screen-store .hero-title-col{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+#screen-store .logo-badge{ width:64px; height:64px; border-radius:16px; background:#111; display:flex; align-items:center; justify-content:center; font-size:24px; flex:none; border:1px solid rgba(242,242,243,0.6); overflow:hidden; }
 #screen-store .logo-badge img{ width:100%; height:100%; object-fit:cover; display:block; }
-#screen-store .store-title{ font-size:26px; font-weight:800; }
-#screen-store .store-rating{ font-size:13px; font-weight:600; margin-top:4px; display:flex; align-items:center; gap:6px; }
+#screen-store .store-title{ font-size:28px; line-height:32px; font-weight:700; }
+#screen-store .store-rating{ font-size:14px; line-height:20px; font-weight:400; display:flex; align-items:center; gap:6px; }
 #screen-store .store-body{ padding:16px; }
+/* Fix 1 (curve pass): real Figma divider at the bottom of the hero photo
+   (node I2533:478036;1756:827274, "curve", get_design_context on
+   2533:478035 -> imgCurve asset 921e58cb-8990-40ff-b382-cc3103f25c93.svg) —
+   a SEPARATE, much smaller/simpler asset from the home screen's 3-tone 48px
+   wave (#fcda97/#f9efdc/#ffffff): this one is a single flat white path,
+   only 8px tall, full-bleed width. It marks the transition from the dark
+   hero photo into the white content below (segmented control / info-strip /
+   tab menu), i.e. right after the title/header block and before the tab
+   menu, matching this file's existing .hero-photo -> .store-body flow. (The
+   OTHER "curve" instance found in the same Figma frame, inside the tab bar's
+   own BG layer at node 2533:387262, resolved to an EMPTY <g> with no path
+   data when its asset was downloaded — i.e. not a real visible divider — so
+   it is correctly not reproduced here.) */
+#screen-store .hero-divider-curve{ margin:0 -1px; height:8px; line-height:0; }
+#screen-store .hero-divider-curve svg{ display:block; width:calc(100% + 2px); height:8px; }
 /* SegmentedControl tokens cross-checked against core-theme-constants.scss /
    core-theme-mode-colors.scss (component-segmentedControl-*): container
    padding 4px + cornerRadius full + background gray95 already matched: only
@@ -878,13 +909,16 @@ img{-webkit-user-drag:none;user-select:none;}
         </div>
       </div>
       <div class="hero-bottom">
-        <div>
+        <div class="hero-title-row">
           <div class="logo-badge" id="store-logo">🥗</div>
-          <div class="store-title" id="store-title">Store</div>
-          <div class="store-rating" id="store-rating">98% (413) · 32 Reviews</div>
+          <div class="hero-title-col">
+            <div class="store-title" id="store-title">Store</div>
+            <div class="store-rating" id="store-rating">98% (413) · 32 Reviews</div>
+          </div>
         </div>
       </div>
     </div>
+    <div class="hero-divider-curve" aria-hidden="true"><svg viewBox="0 0 402 8" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="M157.584 0C97.9805 0 45.0239 0 0 7.99998L402 8C311.952 8 232.088 0 157.584 0L157.584 0Z" fill="#ffffff"/></svg></div>
     <!-- Compact "scrolled" header — mirrors Figma frame "Scrolled view -
          unfiltered" (node 2533:386547 / component instance 2533:386548,
          "HG Header"). Hidden off-screen above the viewport by default and
@@ -1480,6 +1514,39 @@ img{-webkit-user-drag:none;user-select:none;}
   ];
   var FILTER_LABEL = {}; FILTERS.forEach(function(f){ FILTER_LABEL[f.id] = f.label; });
 
+  // Shared alphabetical-by-label ordering, used everywhere a product's own
+  // dietary tags or the store-view Filters modal's option grid need to
+  // render in a consistent, predictable order instead of whatever order
+  // they happen to appear in an item's own `tags` array (MENUS) or in the
+  // FILTERS catalogue above. Sorts by the actual display label text (not
+  // internal id), so it stays correct even if a future id/label pair ever
+  // diverges in ordering (e.g. an id added out of alphabetical position).
+  // NOTE: intentionally scoped to tagRow()/openProductPage() (product tag
+  // pills) and renderFiltersGrid() (store-view dietary modal) only — the
+  // wall's Food type modal (renderFoodTypeGrid()/FOODTYPE_OPTIONS) and the
+  // wall's filter carousel (renderWallCarousel()/WALL_CAROUSEL) each have
+  // their own deliberately-set orders and must not be touched by this.
+  function sortTagsByLabel(tagIds){
+    return tagIds.slice().sort(function(a,b){ return FILTER_LABEL[a].localeCompare(FILTER_LABEL[b]); });
+  }
+  function sortFiltersByLabel(filters){
+    return filters.slice().sort(function(a,b){ return a.label.localeCompare(b.label); });
+  }
+  // Fix 3: when at least one dietary filter is currently active for the
+  // relevant store, a product's own matching tag(s) should lead its tag
+  // row/pills (alphabetical among themselves), followed by its remaining
+  // non-matching tags (also alphabetical among themselves) — instead of
+  // the plain full-alphabetical order used while no filter is active.
+  // `activeFilters` is the Set of currently-active filter ids for the
+  // store the item belongs to (or an empty/absent Set, which falls back
+  // to plain alphabetical — Fix 1/2's default, no-filter-active order).
+  function sortTagsForDisplay(tagIds, activeFilters){
+    if (!activeFilters || activeFilters.size===0) return sortTagsByLabel(tagIds);
+    var matched = tagIds.filter(function(t){ return activeFilters.has(t); });
+    var rest = tagIds.filter(function(t){ return !activeFilters.has(t); });
+    return sortTagsByLabel(matched).concat(sortTagsByLabel(rest));
+  }
+
   /* ============================= FOOD TYPE MODAL OPTIONS ============================= */
   // The full option list for the new "Food type" modal (Fix C — separate
   // from FILTERS/the dietary modal above), read verbatim off the real
@@ -1615,62 +1682,76 @@ img{-webkit-user-drag:none;user-select:none;}
   }
 
   /* Food wall filter carousel (Figma node 2533:387006 > carousel). Real per-chip
-     illustrations pulled from Figma; "Gluten free" reuses the modal's own
-     glutenFree illustration since the wall carousel has no dedicated asset for it.
-     Fix E: kept exactly the 4 originally-working chips (Promotions, Vegetarian,
-     Gluten free, Mediterranean) and removed "Mexican" — its 23-layer illustration
-     itself rendered fine under inspection (verified with a real headless browser:
-     every layer decoded, all insets valid), but it sat right where the *actual*
-     bug's damage was worst (see the scroll-padding fix + comment on
-     #screen-wall .bubble-row above) — with the leading padding silently eaten,
-     the row's visible window ended exactly at Mediterranean's trailing edge and
-     Mexican had zero pixels of peek, reading as "the carousel breaks after
-     Mediterranean". Removing Mexican and adding 3 new chips (Halal, Vegan, Asian)
-     is per Fix E's brief, sourced from the same FOODTYPE_OPTIONS list the new
-     Food type modal (Fix C) uses; Halal and Vegan reuse the exact single-layer
-     illustrations already extracted for FILTERS (ASSET.halal/ASSET.vegan) —
-     re-extracting was unnecessary since that exact concept already has an
-     embedded asset — and only Asian needed a fresh single-layer SVG pull
-     (ASSET.asian, added alongside the FILTERS/mex* assets above). All 7 chips
-     (4 kept + 3 new) share one state.wallFilters Set with the chip label
-     (Fix B) and the Food type modal (Fix C) — toggling any of them updates the
-     other two UIs, since all three simply read/write the same state. */
+     illustrations pulled from Figma. Latest requested set/order (this pass):
+     Promotions, Burgers, Asian, Sushi, Vegetarian, Gluten free, Mexican, Italian,
+     Vegan — appended Vegan as the 9th/last chip on an immediate follow-up to
+     the previous reorder pass (no position specified, so it goes at the end).
+     Vegan is NOT a new extraction: it reuses the exact `vegan` asset/inset
+     already defined in FILTERS and FOODTYPE_OPTIONS above (same id, same
+     layers), so it drops straight into state.wallFilters/FOODTYPE_LABEL/the
+     Food type modal with no new wiring. This set replaces the previous Fix E
+     set (Promotions/Vegetarian/Gluten free/Mediterranean/Halal/Vegan/Asian;
+     Mediterranean/Halal are still dropped from the carousel, though their
+     illustrations stay defined/used elsewhere — FILTERS grid, FOODTYPE_OPTIONS
+     — so nothing is orphaned). Promotions stays non-interactive (a promo tag,
+     not a togglable dietary/cuisine filter); every other chip is interactive
+     and toggles state.wallFilters exactly as before. Burgers/Sushi/Mexican/
+     Italian are NOT new extractions either: they reuse the exact
+     ftBurgersIcon/ftSushiIcon/ftMexicanIcon/ftItalianIcon assets already
+     pulled from uds-react for the Food type modal's 37-option grid (see
+     FOODTYPE_OPTIONS above), same ids/insets, so FOODTYPE_LABEL and the
+     "Food type: …" chip summary (Fix B) already resolve them with no extra
+     wiring. Asian/Vegetarian/Gluten free/Promotions reuse their own
+     already-extracted illustrations verbatim. All interactive chips share one
+     state.wallFilters Set with the "Food type" chip label (Fix B) and the
+     Food type modal (Fix C) — toggling any of them updates the other two UIs,
+     since all three simply read/write the same
+     state. */
   var WALL_CAROUSEL = [
     { id:'promotions', label:'Promotions', interactive:false,
       layers:[ {img:'promoTagsRedGreen', inset:[13.9,19.18,13.9,19.18]} ] },
+    { id:'burgers', label:'Burgers', interactive:true,
+      layers:[ {img:'ftBurgersIcon', inset:[17,17,17,17]} ] },
+    { id:'asian', label:'Asian', interactive:true,
+      layers:[ {img:'asian', inset:[13.15,11.3,14.31,10.6]} ] },
+    // Fix (wall-carousel illustration sizing pass): ftSushiIcon/
+    // ftMexicanIcon/ftItalianIcon/vegan are all landscape source assets
+    // (real pixel/viewBox ratios ~1.06-1.27, wider than tall) reused
+    // verbatim from FOODTYPE_OPTIONS/FILTERS. Their insets alone don't
+    // control the rendered box size the way the carousel's original 4
+    // chips' insets do: with only `inset` set on an <img> (no explicit
+    // width/height), a PNG-backed icon's rendered box falls back to (box
+    // width from the L/R percentages * its own naturalHeight/naturalWidth)
+    // — silently ignoring the T/B numbers — while an SVG-backed icon with
+    // explicit width/height attributes (vegan) ignores `inset` altogether
+    // and renders at its raw intrinsic size. Both are invisible for the
+    // carousel's original chips (Promotions/Asian/Vegetarian/Gluten free)
+    // only because those insets were computed straight from each real
+    // Figma layer's own bounding box, so they're already self-consistent
+    // with that asset's own ratio — but it makes these 4 reused, landscape
+    // assets render visibly SHORTER than ftBurgersIcon (~151x150, already
+    // near-square so unaffected) and the rest of the row. Confirmed with a
+    // headless-Chromium pixel measurement of the actual rendered chips.
+    // Fixed by pairing new carousel-only insets (below) with
+    // insetStyleCarousel() (see its doc comment above insetStyle()), which
+    // additionally pins explicit width/height derived from the same 4
+    // numbers so the rendered box always matches the declared inset,
+    // regardless of the underlying asset's own intrinsic sizing behavior —
+    // scoped to renderWallCarousel() only, so FOODTYPE_OPTIONS' and
+    // FILTERS' own insets/rendering (and every other surface reusing these
+    // ASSET entries) are untouched.
+    { id:'sushi', label:'Sushi', interactive:true,
+      layers:[ {img:'ftSushiIcon', inset:[18.5,16.5,18.5,16.5]} ] },
     { id:'vegetarian', label:'Vegetarian', interactive:true,
       layers:[ {img:'salad', inset:[12.06,32.64,44.51,11.94]}, {img:'avocadoToast', inset:[36.96,12.71,12.91,27.62]} ] },
     { id:'glutenfree', label:'Gluten free', interactive:true,
       layers:[ {img:'glutenFree', inset:[16.7,17.84,16.69,17.84]} ] },
-    { id:'mediterranean', label:'Mediterranean', interactive:false,
-      layers:[
-        {img:'medOliveOil', inset:[12.7,13.32,19.35,56.18]},
-        {img:'medG0', inset:[35.09,22.72,24.27,11.51]},
-        {img:'medG1', inset:[35.42,52.34,28.47,21.53]},
-        {img:'medG2', inset:[42.48,28.48,30.88,36.6]},
-        {img:'medG3', inset:[34.78,42.8,29.83,27.6]},
-        {img:'medG4', inset:[49.62,38.21,36.2,47.73]},
-        {img:'medG5', inset:[49.81,55.1,37.38,34.6]},
-        {img:'medG6', inset:[56.32,29.14,26,51.45]},
-        {img:'medG7', inset:[51.97,60.96,32.18,23.18]},
-        {img:'medG8', inset:[57.58,41.03,27.25,43.8]},
-        {img:'medG9', inset:[56.69,49.66,29.37,29.62]},
-        {img:'medG10', inset:[48.24,73.53,38.93,16.2]},
-        {img:'medV0', inset:[47.49,26.04,14.31,13.89]},
-        {img:'medV1', inset:[48.91,32.44,19.63,13.92]},
-        {img:'medV2', inset:[48.91,41.54,23.99,13.92]},
-        {img:'medV3', inset:[48.91,41.54,23.99,13.92]},
-        {img:'medV4', inset:[48.91,82.13,29.68,13.92]},
-        {img:'medV5', inset:[46.71,25.27,13.52,13.1]},
-        {img:'medV6', inset:[74.6,39.23,22,57.36]},
-        {img:'medV7', inset:[59.11,80.36,39.12,17.87]}
-      ] },
-    { id:'halal', label:'Halal', interactive:true,
-      layers:[ {img:'halal', inset:[12.85,12.02,14.21,17.07]} ] },
+    { id:'mexican', label:'Mexican', interactive:true,
+      layers:[ {img:'ftMexicanIcon', inset:[18.5,15.5,18.5,15.5]} ] },
+    { id:'italian', label:'Italian', interactive:true,
+      layers:[ {img:'ftItalianIcon', inset:[18.5,11,18.5,11]} ] },
     { id:'vegan', label:'Vegan', interactive:true,
-      layers:[ {img:'vegan', inset:[16.83,10.74,22.66,11.64]} ] },
-    { id:'asian', label:'Asian', interactive:true,
-      layers:[ {img:'asian', inset:[13.15,11.3,14.31,10.6]} ] }
+      layers:[ {img:'vegan', inset:[18.5,9,18.5,9]} ] }
   ];
 
   /* ============================= MENU DATA ============================= */
@@ -1872,7 +1953,7 @@ img{-webkit-user-drag:none;user-select:none;}
     row.innerHTML = WALL_CAROUSEL.map(function(f){
       var selected = f.interactive && state.wallFilters.has(f.id);
       var layers = f.layers.map(function(l){
-        return '<img class="art" src="'+ASSET[l.img]+'" style="'+insetStyle(l.inset)+'" />';
+        return '<img class="art" src="'+ASSET[l.img]+'" style="'+insetStyleCarousel(l.inset)+'" />';
       }).join('');
       var attrs = f.interactive ? ' data-action="toggle-wall-filter" data-filter-id="'+f.id+'"' : '';
       var cls = 'bubble' + (f.interactive ? ' interactive' : '') + (selected ? ' selected' : '');
@@ -2040,10 +2121,15 @@ img{-webkit-user-drag:none;user-select:none;}
   // "scrolled/unfiltered" state, node 2533:386547, shows tags on every
   // row with no filter active). Order Again cards never show tags — see
   // the call sites below, which simply don't call tagRow() for OA cards.
-  function tagRow(item){
+  // `filters` (the store's currently-active filter Set, or absent/empty)
+  // decides the tag order via sortTagsForDisplay() (Fix 1/3): no filter
+  // active -> full alphabetical; filter(s) active -> matching tag(s)
+  // first (alphabetical among themselves), then the rest (alphabetical).
+  function tagRow(item, filters){
     if (item.tags.length===0) return '';
-    var shown = item.tags.slice(0,2).map(function(t){ return '<span class="tag">'+FILTER_LABEL[t]+'</span>'; }).join('');
-    var extra = item.tags.length>2 ? '<span class="tag">+'+(item.tags.length-2)+'</span>' : '';
+    var tags = sortTagsForDisplay(item.tags, filters);
+    var shown = tags.slice(0,2).map(function(t){ return '<span class="tag">'+FILTER_LABEL[t]+'</span>'; }).join('');
+    var extra = tags.length>2 ? '<span class="tag">+'+(tags.length-2)+'</span>' : '';
     return '<div class="tag-row">'+shown+extra+'</div>';
   }
   // Builds the single tabMenu's tab list for the current store + active
@@ -2229,7 +2315,7 @@ img{-webkit-user-drag:none;user-select:none;}
                 '<div class="body">' +
                   '<div class="row1"><span>'+item.name+'</span><span>'+item.price+'</span></div>' +
                   '<div class="desc">'+item.desc+'</div>' +
-                  tagRow(item) +
+                  tagRow(item, filters) +
                 '</div>' +
               '</div>';
             }).join('') +
@@ -2311,21 +2397,21 @@ img{-webkit-user-drag:none;user-select:none;}
   // + fade-out exit animation has actually finished playing.
   var SNACKBAR_EXIT_MS = 200;
 
-  // Fix A: BOTH snackbar kinds auto-dismiss on their own after 4s if the
-  // user doesn't interact with them, reusing the exact same slide-down+
-  // fade-out exit path as a manual dismiss (dismissSnackbar()/
-  // undoCarriedFilter(), which both just route back through this same
-  // function's (!desired) branch below):
-  //  - the hint/suggestion snackbar ("<filter> filter available" + Apply +
-  //    close-X, kind:'suggest', renders with the .positive/green class);
-  //  - the auto-applied-on-entry snackbar ("<filter> filter applied" +
-  //    Undo, kind:'applied', renders with the .warning/yellow class — this
-  //    is the one the user actually means by "the yellow snackbar", and
-  //    the one this fix adds the behavior to; a prior pass had only wired
-  //    it up for 'suggest').
-  // Tapping Undo (on 'applied') or Apply/the close-X (on 'suggest') still
-  // correctly cancels the pending timer: both actions replace state.stores
-  // [id].snackbar (with a filters set, or null) before calling
+  // Fix A: the auto-applied-on-entry snackbar ("<filter> filter applied" +
+  // Undo, kind:'applied', renders with the .warning/yellow class — this is
+  // the one the user actually means by "the yellow snackbar") auto-
+  // dismisses on its own after 4s if the user doesn't interact with it,
+  // reusing the exact same slide-down+fade-out exit path as a manual
+  // dismiss (undoCarriedFilter(), which just routes back through this same
+  // function's (!desired) branch below).
+  // The hint/suggestion snackbar ("<filter> filter available" + Apply +
+  // close-X, kind:'suggest', renders with the same .warning/yellow class as
+  // 'applied' — see the .snackbar rules above) does
+  // NOT auto-dismiss — it stays on screen until the user taps Apply or the
+  // close-X. A prior pass had wired the same 4s timer up for 'suggest' too;
+  // this one removes it from that kind only, leaving 'applied' untouched.
+  // Tapping Undo (on 'applied') still correctly cancels the pending timer:
+  // it replaces state.stores[id].snackbar (with null) before calling
   // renderStore()/renderStoreSnackbar() again, so desiredKey no longer
   // matches wrap.dataset.snackbarKey and the "nothing changed" early-return
   // below (the only place that *doesn't* unconditionally clear the timer)
@@ -2334,12 +2420,12 @@ img{-webkit-user-drag:none;user-select:none;}
   // clears it too, via resetSnackbarWrap() (see showScreen() below).
   var SNACKBAR_HINT_AUTODISMISS_MS = 4000;
 
-  // Arms (or re-arms) either snackbar kind's 4s auto-dismiss timer. `key` is
-  // the exact desiredKey the timer was armed for, so the fired callback can
-  // no-op if the snackbar has since changed identity by some path that
-  // didn't go through the clearTimeout calls below (defensive; in normal
-  // operation those clears already cover every manual-dismiss/navigate-away
-  // case).
+  // Arms (or re-arms) the 'applied' snackbar's 4s auto-dismiss timer — never
+  // called for kind:'suggest' (see Fix A note above). `key` is the exact
+  // desiredKey the timer was armed for, so the fired callback can no-op if
+  // the snackbar has since changed identity by some path that didn't go
+  // through the clearTimeout calls below (defensive; in normal operation
+  // those clears already cover every manual-dismiss/navigate-away case).
   function scheduleHintAutoDismiss(wrap, storeId, key){
     wrap._hintAutoDismissTimer = setTimeout(function(){
       wrap._hintAutoDismissTimer = null;
@@ -2396,13 +2482,13 @@ img{-webkit-user-drag:none;user-select:none;}
 
     if (desiredKey === currentKey && !isLeaving){
       // Nothing about the snackbar itself changed, so don't replay its
-      // entrance animation — but if it's either auto-dismissing kind
-      // (Fix A: 'suggest' or 'applied') and its timer isn't currently
-      // running (e.g. it was paused by showScreen() while the user
-      // navigated away from the store screen and this is the same
+      // entrance animation — but if it's the auto-dismissing kind (Fix A:
+      // 'applied' only — 'suggest' never auto-dismisses) and its timer
+      // isn't currently running (e.g. it was paused by showScreen() while
+      // the user navigated away from the store screen and this is the same
       // snackbar on return), arm a fresh one rather than leaving it stuck
       // with no auto-dismiss.
-      if (desired && (desired.kind === 'suggest' || desired.kind === 'applied') && !wrap._hintAutoDismissTimer){
+      if (desired && desired.kind === 'applied' && !wrap._hintAutoDismissTimer){
         scheduleHintAutoDismiss(wrap, storeId, desiredKey);
       }
       return;
@@ -2432,32 +2518,36 @@ img{-webkit-user-drag:none;user-select:none;}
     wrap.dataset.snackbarKey = desiredKey;
     delete wrap.dataset.leaving;
     var names = formatFilterNameList(Array.from(desired.filters).map(function(id){ return FILTER_LABEL[id]; }));
-    // Leading icon-blob: black sparkle glyph (ICONS.sparkle) layered over a
-    // color-matched blob shape — green for the hint/suggest snackbar
-    // (matches .snackbar.positive's background), yellow for the applied/
-    // carried-over snackbar (matches .snackbar.warning's background). See
-    // the .snackbar-icon rules above and the Figma tokens noted next to
+    // Leading icon-blob: black sliders/filter glyph (ICONS.sliders — same
+    // glyph used elsewhere for filter affordances, e.g. the store header's
+    // filter nav button) layered over a color-matched blob shape. Both the
+    // hint/suggest snackbar and the applied/carried-over snackbar use the
+    // same yellow .snackbar.warning background + ASSET.iconBlobWarning blob
+    // (the hint snackbar previously used the green .positive/iconBlobPositive
+    // styling; that was changed to match applied's color). See the
+    // .snackbar-icon rules above and the Figma tokens noted next to
     // ASSET.iconBlobPositive/iconBlobWarning.
     if (desired.kind === 'suggest'){
       wrap.innerHTML =
-        '<div class="snackbar positive">' +
-          '<span class="snackbar-icon"><img class="icon-blob-shape" src="'+ASSET.iconBlobPositive+'" alt="" />'+ICONS.sparkle+'</span>' +
+        '<div class="snackbar warning">' +
+          '<span class="snackbar-icon"><img class="icon-blob-shape" src="'+ASSET.iconBlobWarning+'" alt="" />'+ICONS.sliders+'</span>' +
           '<span class="snackbar-text">'+names+' filter available</span>' +
           '<button class="snackbar-action" data-action="apply-suggested-filter">Apply</button>' +
           '<button class="snackbar-close" data-action="dismiss-snackbar">'+ICONS.close+'</button>' +
         '</div>';
-      scheduleHintAutoDismiss(wrap, storeId, desiredKey);
+      // Fix A: 'suggest' does NOT auto-dismiss — it stays visible until the
+      // user taps Apply or the close-X, so no timer is armed here.
     } else {
       wrap.innerHTML =
         '<div class="snackbar warning">' +
-          '<span class="snackbar-icon"><img class="icon-blob-shape" src="'+ASSET.iconBlobWarning+'" alt="" />'+ICONS.sparkle+'</span>' +
+          '<span class="snackbar-icon"><img class="icon-blob-shape" src="'+ASSET.iconBlobWarning+'" alt="" />'+ICONS.sliders+'</span>' +
           '<span class="snackbar-text">'+names+' filter applied</span>' +
           '<button class="snackbar-undo" data-action="undo-carried-filter">Undo</button>' +
         '</div>';
       // Fix A: the auto-applied "...filter applied" + Undo snackbar
-      // (kind:'applied', the yellow one) now also auto-dismisses after 4s,
-      // reusing the exact same timer/animation mechanism as the 'suggest'
-      // snackbar above.
+      // (kind:'applied', the yellow one) auto-dismisses after 4s — see the
+      // SNACKBAR_HINT_AUTODISMISS_MS doc comment above for why 'suggest'
+      // (the branch just above this one) does not get the same timer.
       scheduleHintAutoDismiss(wrap, storeId, desiredKey);
     }
   }
@@ -2860,6 +2950,63 @@ img{-webkit-user-drag:none;user-select:none;}
   function insetStyle(inset){
     return 'inset:'+inset[0]+'% '+inset[1]+'% '+inset[2]+'% '+inset[3]+'%;';
   }
+  // Wall-carousel-only variant of insetStyle(): also pins explicit
+  // width/height (derived from the same 4 inset numbers) instead of
+  // leaving them to the browser's default replaced-element auto-sizing.
+  // Root cause this works around: with only `inset` set (no width/height)
+  // on an absolutely-positioned <img>, an over-constrained box's actual
+  // rendered size falls back to the *source asset's own* intrinsic
+  // sizing info instead of purely honoring the 4 declared percentages —
+  // confirmed two different ways in this file's assets: a PNG-backed icon
+  // (e.g. ftSushiIcon/ftMexicanIcon/ftItalianIcon, real pixel dimensions
+  // like 159x150) renders at a HEIGHT derived from (box width from L/R *
+  // its own naturalHeight/naturalWidth), silently ignoring the top/bottom
+  // numbers; an SVG-backed icon with explicit width/height attributes
+  // (e.g. `vegan`, ASSET.vegan) renders at its raw intrinsic CSS size
+  // (~56x44) and ignores inset entirely, regardless of any of the 4
+  // percentages. Both behaviors are invisible for the wall carousel's 4
+  // original chips (Promotions/Asian/Vegetarian/Gluten free) only because
+  // their per-side insets happen to already be self-consistent with their
+  // own asset's real aspect ratio (extracted straight from each's real
+  // Figma layer position/size) — but they silently break for any reused
+  // asset whose insets weren't computed against that same asset's own
+  // ratio (ftBurgersIcon/ftSushiIcon/ftMexicanIcon/ftItalianIcon/vegan,
+  // reused verbatim from FOODTYPE_OPTIONS/FILTERS — see WALL_CAROUSEL's own
+  // doc comment above). Explicitly setting width/height here makes the
+  // rendered box match the declared inset numbers exactly, for every
+  // asset type, and lets .filter-illustration .art's existing
+  // object-fit:contain do real letterboxing instead of being a no-op.
+  // Scoped to renderWallCarousel() only (see below) — insetStyle() itself,
+  // and its other caller renderFiltersGrid() (the store's dietary FILTERS
+  // modal), is untouched, so this cannot affect how these same ASSET
+  // entries render anywhere else in the file.
+  function insetStyleCarousel(inset){
+    var t=inset[0], r=inset[1], b=inset[2], l=inset[3];
+    var w = 100-l-r, h = 100-t-b;
+    return 'inset:'+t+'% '+r+'% '+b+'% '+l+'%; width:'+w+'%; height:'+h+'%;';
+  }
+  // Food-type-modal-only variant of insetStyle() — same fix, same root
+  // cause, as insetStyleCarousel() above (see its doc comment): an
+  // absolutely-positioned <img> sized only via `inset` (no explicit
+  // width/height) derives its actual rendered box from the source asset's
+  // own intrinsic dimensions rather than purely honoring the 4 declared
+  // inset percentages, so FOODTYPE_OPTIONS' mix of square SVGs and
+  // landscape PNGs (e.g. ftSushiIcon/ftMexicanIcon/ftItalianIcon/
+  // ftBurgersIcon) rendered at inconsistent sizes across the 37-option
+  // grid. Pinning explicit width/height (derived from the same 4 inset
+  // numbers) makes the rendered box match the declared insets exactly for
+  // every asset type, letting .filter-illustration .art's existing
+  // object-fit:contain do real letterboxing instead of being a no-op.
+  // Scoped to renderFoodTypeGrid() only — insetStyle() itself, and its
+  // other caller renderFiltersGrid() (the store's dietary FILTERS modal),
+  // is untouched, so this cannot affect how these same ASSET entries
+  // render anywhere else in the file (wall carousel, store FILTERS modal,
+  // or any other reuse of ASSET.ft*Icon).
+  function insetStyleFoodType(inset){
+    var t=inset[0], r=inset[1], b=inset[2], l=inset[3];
+    var w = 100-l-r, h = 100-t-b;
+    return 'inset:'+t+'% '+r+'% '+b+'% '+l+'%; width:'+w+'%; height:'+h+'%;';
+  }
   // Derives which FILTERS entries are actually offered in a given modal
   // context, instead of hardcoding per-store exceptions: a filter only
   // appears if at least one product in the context's relevant menu(s)
@@ -2893,7 +3040,7 @@ img{-webkit-user-drag:none;user-select:none;}
     // Both the check-badge and the yellow overlay are always rendered
     // (not conditionally omitted), letting their opacity transitions
     // actually play instead of popping in already-selected.
-    grid.innerHTML = availableFilters(state.modal.context).map(function(f){
+    grid.innerHTML = sortFiltersByLabel(availableFilters(state.modal.context)).map(function(f){
       var selected = state.modal.temp.has(f.id);
       var layers = f.layers.map(function(l){
         return '<img class="art" src="'+ASSET[l.img]+'" style="'+insetStyle(l.inset)+'" />';
@@ -3041,7 +3188,7 @@ img{-webkit-user-drag:none;user-select:none;}
     grid.innerHTML = FOODTYPE_OPTIONS.map(function(f){
       var selected = state.foodType.temp.has(f.id);
       var layers = f.layers.map(function(l){
-        return '<img class="art" src="'+ASSET[l.img]+'" style="'+insetStyle(l.inset)+'" />';
+        return '<img class="art" src="'+ASSET[l.img]+'" style="'+insetStyleFoodType(l.inset)+'" />';
       }).join('');
       return '<div class="foodtype-card'+(selected?' selected':'')+'" data-filter-id="'+f.id+'" data-action="toggle-foodtype-option">' +
         '<div class="filter-illustration">' +
@@ -3172,7 +3319,12 @@ img{-webkit-user-drag:none;user-select:none;}
   // always mirrors the item's price, but the button itself stays
   // permanently disabled (see .product-add-btn) — ordering is out of scope
   // for this prototype, only viewing product details is.
-  function openProductPage(item){
+  // `filters` (the current store's active filter Set, passed in by the
+  // 'open-product' handler below) keeps this page's tag order consistent
+  // with the store-view menu row it was opened from — same
+  // sortTagsForDisplay() rule (Fix 1/3): no filter active -> full
+  // alphabetical, filter(s) active -> matching tag(s) first.
+  function openProductPage(item, filters){
     if (productCloseTimer){ clearTimeout(productCloseTimer); productCloseTimer = null; }
     var overlay = document.getElementById('product-overlay');
     var sheet = overlay.querySelector('.product-sheet');
@@ -3182,7 +3334,7 @@ img{-webkit-user-drag:none;user-select:none;}
     document.getElementById('product-name').textContent = item.name;
     document.getElementById('product-price').textContent = item.price;
     document.getElementById('product-desc').textContent = item.description || item.desc || '';
-    document.getElementById('product-tags').innerHTML = item.tags.map(function(t){
+    document.getElementById('product-tags').innerHTML = sortTagsForDisplay(item.tags, filters).map(function(t){
       return '<span class="tag">'+FILTER_LABEL[t]+'</span>';
     }).join('');
     document.getElementById('product-add-btn').textContent = 'Add · ' + item.price;
@@ -3264,7 +3416,7 @@ img{-webkit-user-drag:none;user-select:none;}
         var pMenu = MENUS[state.currentStore] || [];
         var pItem = null;
         for (var pIdx=0; pIdx<pMenu.length; pIdx++){ if (pMenu[pIdx].id === pItemId){ pItem = pMenu[pIdx]; break; } }
-        if (pItem) openProductPage(pItem);
+        if (pItem) openProductPage(pItem, state.stores[state.currentStore].filters);
         break;
       case 'close-product': closeProductPage(); break;
       case 'scroll-to-category':
